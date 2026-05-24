@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
@@ -37,6 +38,9 @@ class ThumbnailRepository(
   private val memoryCache: LruCache<String, Bitmap>
   private val diskDir: File = File(context.filesDir, "thumbnails").apply { mkdirs() }
   private val ongoingOperations = ConcurrentHashMap<String, Deferred<Bitmap?>>()
+  // Semaphore to limit concurrent network thumbnail extractions
+  // prevents connection exhaustion on SMB/FTP servers
+  private val networkSemaphore = kotlinx.coroutines.sync.Semaphore(3)
 
   private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val maxconcurrentfolders = 3
@@ -103,15 +107,24 @@ class ThumbnailRepository(
 
             // Check if this video should use MediaStore
             val videoKey = videoBaseKey(video)
-            val thumbnail = if (useMediaStoreForVideo.containsKey(videoKey)) {
-              // Use MediaStore for this video
+            val isNetwork = isNetworkUrl(video.path)
+            
+            val thumbnail = if (!isNetwork && useMediaStoreForVideo.containsKey(videoKey)) {
+              // Use MediaStore for this video (local only)
               android.util.Log.d("ThumbnailRepository", "Using MediaStore for ${video.displayName}")
               generateWithMediaStore(video, diskCacheDimension)
             } else {
               // Try FastThumbnails first
-              val fastResult = generateWithFastThumbnails(video, diskCacheDimension)
-              if (fastResult == null) {
-                // FastThumbnails failed, mark for MediaStore and try it
+              val fastResult = if (isNetwork) {
+                networkSemaphore.withPermit {
+                  generateWithFastThumbnails(video, diskCacheDimension)
+                }
+              } else {
+                generateWithFastThumbnails(video, diskCacheDimension)
+              }
+
+              if (fastResult == null && !isNetwork) {
+                // FastThumbnails failed, mark for MediaStore and try it (local only)
                 android.util.Log.w("ThumbnailRepository", "FastThumbnails failed for ${video.displayName}, falling back to MediaStore")
                 useMediaStoreForVideo[videoKey] = true
                 generateWithMediaStore(video, diskCacheDimension)
@@ -309,8 +322,16 @@ class ThumbnailRepository(
     return runCatching {
       val positionSec = preferredPositionSeconds(video)
       
+      // For network URLs, prefer using the URI (which may be a content:// URI from our provider)
+      // as it handles credentials and optimized streaming better than the raw path.
+      val loadPath = if (isNetworkUrl(video.path)) {
+        video.uri.toString()
+      } else {
+        video.path.ifBlank { video.uri.toString() }
+      }
+      
       val bmp = FastThumbnails.generateAsync(
-          video.path.ifBlank { video.uri.toString() },
+          loadPath,
           positionSec,
           dimension,
           useHwDec = false
@@ -458,7 +479,8 @@ class ThumbnailRepository(
       path.startsWith("rtmp://", ignoreCase = true) ||
       path.startsWith("rtsp://", ignoreCase = true) ||
       path.startsWith("ftp://", ignoreCase = true) ||
-      path.startsWith("sftp://", ignoreCase = true)
+      path.startsWith("sftp://", ignoreCase = true) ||
+      path.startsWith("smb://", ignoreCase = true)
   }
 
   private fun folderSignature(

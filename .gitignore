@@ -13,3 +13,26 @@ app/release
 /app/standard/
 /app/fdroid/
 /app/playstore/
+
+# Tool specific
+.antigravitycli/
+.kotlin/
+
+# IDE and Project
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/libraries/
+.idea/caches/
+.idea/shelf/
+.idea/assetWizardSettings.xml
+.idea/navEditor.xml
+
+# Kotlin
+kotlin-daemon-*.log
+
+# Built variants
+*.apk
+*.aar
+*.ap_
+*.dex
+/app/build/

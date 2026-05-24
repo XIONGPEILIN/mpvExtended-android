@@ -36,6 +36,15 @@
   <string name="pref_appearance_watched_threshold_title">Watched threshold</string>
   <string name="pref_appearance_watched_threshold_summary">Mark video as watched when playback reaches %d%%</string>
   <string name="video_label_new">NEW</string>
+
+  <string name="folder_folders">Folders</string>
+  <string name="video_videos">Videos</string>
+  <string name="player_sheets_tracks_title">Track Selection</string>
+  <string name="player_sheets_tracks_subtitle">Subtitle</string>
+  <string name="player_sheets_tracks_audio">Audio</string>
+  <string name="player_sheets_tracks_video">Video</string>
+  <string name="player_sheets_tracks_none">None</string>
+
   <!-- Theme names -->
   <string name="theme_default">Default</string>
   <string name="theme_dynamic">Dynamic</string>
@@ -247,6 +256,7 @@
   <string name="anime4k_mode_a_plus">A+</string>
   <string name="anime4k_mode_b_plus">B+</string>
   <string name="anime4k_mode_c_plus">C+</string>
+  <string name="anime4k_mode_artcnn">ArtCNN</string>
   <!-- Anime4K Qualities (Renamed to Mode in UI) -->
   <string name="anime4k_quality_fast">Fast</string>
   <string name="anime4k_quality_balanced">Balanced</string>

@@ -32,11 +32,28 @@ import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import app.marlboroadvance.mpvex.domain.media.model.Video
+import app.marlboroadvance.mpvex.domain.thumbnail.ThumbnailRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
+
+import androidx.compose.ui.platform.LocalContext
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.NetworkStreamingProvider
 
 @Composable
 fun NetworkVideoCard(
@@ -49,11 +66,80 @@ fun NetworkVideoCard(
 ) {
   val appearancePreferences = koinInject<AppearancePreferences>()
   val browserPreferences = koinInject<BrowserPreferences>()
+  val thumbnailRepository = koinInject<ThumbnailRepository>()
   val unlimitedNameLines by appearancePreferences.unlimitedNameLines.collectAsState()
+  val showThumbnails by appearancePreferences.showNetworkThumbnails.collectAsState()
   val showSizeChip by browserPreferences.showSizeChip.collectAsState()
   val maxLines = if (unlimitedNameLines) Int.MAX_VALUE else 2
 
   val thumbSizeDp = 64.dp
+  val thumbWidthPx = with(LocalDensity.current) { thumbSizeDp.roundToPx() }
+  val thumbHeightPx = thumbWidthPx
+
+  // Map NetworkFile to Video for the thumbnail repository
+  val video = remember(file, connection) {
+    // Use the local streaming proxy for thumbnail generation
+    // This is MUCH more reliable than smb:// because libmpv always supports HTTP + Range requests
+    val proxy = app.marlboroadvance.mpvex.ui.browser.networkstreaming.proxy.NetworkStreamingProxy.getInstance()
+    
+    // Create a stable stream ID for this file to avoid redundant registrations
+    val streamId = "thumb_${connection.id}_${file.path.hashCode()}"
+    val proxyUrl = proxy.registerStream(
+      streamId = streamId,
+      connection = connection,
+      filePath = file.path,
+      fileSize = file.size,
+      mimeType = file.mimeType ?: "video/mp4",
+      title = file.name,
+    )
+    
+    val loadableUri = android.net.Uri.parse(proxyUrl)
+
+    Video(
+      id = -1,
+      title = file.name,
+      displayName = file.name,
+      path = file.path, // Keep original path for cache key stability
+      uri = loadableUri, // Use proxy URL for actual frame extraction
+      duration = 0,
+      durationFormatted = "--:--",
+      size = file.size,
+      sizeFormatted = "",
+      dateModified = file.lastModified / 1000,
+      dateAdded = file.lastModified / 1000,
+      mimeType = file.mimeType ?: "video/*",
+      bucketId = "",
+      bucketDisplayName = "",
+      width = 0,
+      height = 0,
+      fps = 0f,
+      resolution = "--",
+    )
+  }
+
+  val thumbnailKey = remember(video.uri, video.size, thumbWidthPx, thumbHeightPx) {
+    thumbnailRepository.thumbnailKey(video, thumbWidthPx, thumbHeightPx)
+  }
+
+  var thumbnail by remember(thumbnailKey) {
+    mutableStateOf(thumbnailRepository.getThumbnailFromMemory(video, thumbWidthPx, thumbHeightPx))
+  }
+
+  LaunchedEffect(thumbnailKey) {
+    thumbnailRepository.thumbnailReadyKeys
+      .filter { it == thumbnailKey }
+      .collect {
+        thumbnail = thumbnailRepository.getThumbnailFromMemory(video, thumbWidthPx, thumbHeightPx)
+      }
+  }
+
+  LaunchedEffect(thumbnailKey, showThumbnails) {
+    if (thumbnail == null && showThumbnails) {
+      thumbnail = withContext(Dispatchers.IO) {
+        thumbnailRepository.getThumbnail(video, thumbWidthPx, thumbHeightPx)
+      }
+    }
+  }
 
   Card(
     modifier =
@@ -85,20 +171,25 @@ fun NetworkVideoCard(
           Modifier
             .size(thumbSizeDp)
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .combinedClickable(
-              onClick = onClick,
-              onLongClick = onLongClick,
-            ),
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         contentAlignment = Alignment.Center,
       ) {
-        // Play icon overlay
-        Icon(
-          Icons.Filled.PlayArrow,
-          contentDescription = "Play",
-          modifier = Modifier.size(48.dp),
-          tint = MaterialTheme.colorScheme.secondary,
-        )
+        if (showThumbnails && thumbnail != null) {
+          Image(
+            bitmap = thumbnail!!.asImageBitmap(),
+            contentDescription = "Thumbnail",
+            modifier = Modifier.fillMaxWidth(),
+            contentScale = ContentScale.Crop,
+          )
+        } else {
+          // Play icon overlay
+          Icon(
+            Icons.Filled.PlayArrow,
+            contentDescription = "Play",
+            modifier = Modifier.size(48.dp),
+            tint = MaterialTheme.colorScheme.secondary,
+          )
+        }
       }
       Spacer(modifier = Modifier.width(16.dp))
       Column(

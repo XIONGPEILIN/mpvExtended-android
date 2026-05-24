@@ -29,9 +29,14 @@ interface NetworkClient {
   suspend fun listFiles(path: String): Result<List<NetworkFile>>
 
   /**
-   * Get input stream for a file
+   * Get input stream for a file, optionally starting at a specific offset
    */
-  suspend fun getFileStream(path: String): Result<InputStream>
+  suspend fun getFileStream(path: String, offset: Long = 0L): Result<InputStream>
+
+  /**
+   * Get file size for a specific file path
+   */
+  suspend fun getFileSize(path: String): Result<Long>
 
   /**
    * Get file URI for playback

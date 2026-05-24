@@ -206,10 +206,12 @@ val scope = rememberCoroutineScope()
           horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
         ) {
           items(Anime4KManager.Mode.entries) { mode ->
+            val isOffMode = mode == Anime4KManager.Mode.OFF
             FilterChip(
               label = { Text(stringResource(mode.titleRes)) },
               selected = anime4kMode == mode.name,
-              enabled = !isHighRes,
+              // Allow clicking 'OFF' even on 4K videos so users can disable it
+              enabled = !isHighRes || isOffMode,
               leadingIcon = null,
               onClick = {
                 decoderPreferences.anime4kMode.set(mode.name)
@@ -223,13 +225,16 @@ val scope = rememberCoroutineScope()
                     } catch (e: IllegalArgumentException) {
                       Anime4KManager.Quality.BALANCED
                     }
+                    
                     val currentMode = try {
                         Anime4KManager.Mode.valueOf(mode.name)
                     } catch (e: IllegalArgumentException) {
                         Anime4KManager.Mode.OFF
                     }
 
-                    val shaderChain = anime4kManager.getShaderChain(currentMode, quality)
+                    // If it's high res and user tries to enable something other than OFF, 
+                    // the apply logic in MPVView will still block it, but we let the pref update.
+                    val shaderChain = if (isHighRes && !isOffMode) "" else anime4kManager.getShaderChain(currentMode, quality)
 
                     // Use setPropertyString for runtime changes
                     MPVLib.setPropertyString("glsl-shaders", if (shaderChain.isNotEmpty()) shaderChain else "")
@@ -244,7 +249,7 @@ val scope = rememberCoroutineScope()
         Text(
             text = stringResource(R.string.anime4k_quality_title),
             style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary
+            color = if (anime4kMode != "ARTCNN") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
         )
         LazyRow(
           horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
@@ -253,7 +258,7 @@ val scope = rememberCoroutineScope()
              FilterChip(
               label = { Text(stringResource(quality.titleRes)) },
               selected = anime4kQuality == quality.name,
-              enabled = anime4kMode != "OFF" && !isHighRes,
+              enabled = anime4kMode != "OFF" && anime4kMode != "ARTCNN" && !isHighRes,
               leadingIcon = null,
               onClick = {
                 decoderPreferences.anime4kQuality.set(quality.name)
