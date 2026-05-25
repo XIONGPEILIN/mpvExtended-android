@@ -1,13 +1,25 @@
 ![banner](fastlane/metadata/android/en-US/images/featureGraphic.png)
 
 # mpvExtended
-[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/marlboro-advance/mpvex.svg?logo=github&label=GitHub&cacheSeconds=3600)](https://github.com/marlboro-advance/mpvex/releases/latest)
-[![GitHub all releases](https://img.shields.io/github/downloads/marlboro-advance/mpvex/total?logo=github&cacheSeconds=3600)](https://github.com/marlboro-advance/mpvex/releases/latest)
+[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/XIONGPEILIN/mpvEx.svg?logo=github&label=GitHub&cacheSeconds=3600)](https://github.com/XIONGPEILIN/mpvEx/releases/latest)
+[![GitHub all releases](https://img.shields.io/github/downloads/XIONGPEILIN/mpvEx/total?logo=github&cacheSeconds=3600)](https://github.com/XIONGPEILIN/mpvEx/releases/latest)
 
 
 **mpvExtended is a fork of [mpv-android](https://github.com/mpv-android/mpv-android), built on the libmpv library. It aims
 to combine the powerful features of mpv with an easy to use interface and additional
 features.**
+
+## Upstream
+
+This fork uses [mpv-android](https://github.com/mpv-android/mpv-android) as the canonical upstream for future sync work.
+The old `mpvEx` fork is not treated as upstream.
+
+Typical sync flow:
+
+```bash
+git fetch upstream
+git log --oneline HEAD..upstream/master
+```
 
 - Simpler and Easier to Use UI
 - Material3 Expressive Design
@@ -28,25 +40,20 @@ features.**
 - Custom Playlist management support
 
 **This project is still in development and is expected to have bugs. Please report any bugs you find in
-the [Issues](https://github.com/marlboro-advance/mpvEx/issues) section.**
+the [Issues](https://github.com/XIONGPEILIN/mpvEx/issues) section.**
 
 ---
 
 ## Installation
 
 ### Stable Release
-Download the latest stable version from the [GitHub releases page](https://github.com/marlboro-advance/mpvEx/releases).
+Download the latest stable version from the [GitHub releases page](https://github.com/XIONGPEILIN/mpvEx/releases).
 
-[![Download Release](https://img.shields.io/badge/Download-Release-blue?style=for-the-badge)](https://github.com/marlboro-advance/mpvEx/releases)
+[![Download Release](https://img.shields.io/badge/Download-Release-blue?style=for-the-badge)](https://github.com/XIONGPEILIN/mpvEx/releases)
 
 Or you can get the stable releases here
 
 [<img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroidButtonGreyBorder_nofont.png" height="50" alt="Get it at IzzyOnDroid">](https://apt.izzysoft.de/packages/app.marlboroadvance.mpvex)
-
-### Preview Builds
-For testing purposes only
-
-[![Download Preview Builds](https://img.shields.io/badge/Download-Preview%20Builds-red?style=for-the-badge)](https://marlboro-advance.github.io/mpvEx/)
 
 ---
 
@@ -154,21 +161,12 @@ Copy the contents of `keystore.txt` and paste it as the value for the `SIGNING_K
 - [Next player](https://github.com/anilbeesetti/nextplayer)
 - [Gramophone](https://github.com/FoedusProgramme/Gramophone)
 
----
-
-## Support the Project <img src="https://raw.githubusercontent.com/Tarikul-Islam-Anik/Animated-Fluent-Emojis/master/Emojis/Smilies/Heart%20with%20Ribbon.png" alt="Heart with Ribbon" width="25" height="25" />
-
-If you find mpvExtended useful, consider supporting the development:
-
-[![UPI](https://img.shields.io/badge/UPI-aadiinarvekar@upi-blue?style=for-the-badge&logo=google-pay&logoColor=white)](upi://pay?pa=aadiinarvekar@upi)
-
----
 ## Star History <img src="https://raw.githubusercontent.com/Tarikul-Islam-Anik/Animated-Fluent-Emojis/master/Emojis/Travel%20and%20places/Star.png" alt="Star" width="25" height="25" />
 
-<a href="https://www.star-history.com/#marlboro-advance/mpvEx&type=date&legend=top-left">
+<a href="https://www.star-history.com/#XIONGPEILIN/mpvEx&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=marlboro-advance/mpvEx&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=marlboro-advance/mpvEx&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=marlboro-advance/mpvEx&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=XIONGPEILIN/mpvEx&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=XIONGPEILIN/mpvEx&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=XIONGPEILIN/mpvEx&type=date&legend=top-left" />
  </picture>
 </a>
