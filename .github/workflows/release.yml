@@ -24,19 +24,25 @@ jobs:
       - name: Checkout LFS objects
         run: git lfs checkout
 
-      - name: Setup JDK 11 (Better compatibility for old Keystores)
+      - name: Setup JDK 17 (Required for Gradle 9+)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'adopt'
+          java-version: 17
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Build release with Gradle (Using JDK 17)
+        run: ./gradlew assembleDefaultRelease --stacktrace
+
+      - name: Setup JDK 11 (Temporary switch for Signing compatibility)
         uses: actions/setup-java@v4
         with:
           distribution: 'adopt'
           java-version: 11
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
-
-      - name: Build release with Gradle
-        run: ./gradlew assembleDefaultRelease --stacktrace
-
-      - name: Sign APKs
+      - name: Sign APKs (Using JDK 11)
         uses: r0adkll/sign-android-release@v1
         id: sign_app
         with:
@@ -56,11 +62,9 @@ jobs:
           echo "📦 Processing signed APKs..."
           find app/build/outputs/apk/default/release -name "*-signed.apk" -type f | while read -r src; do
             filename=$(basename "$src")
-            # Convert name to mpvNAS-Player-abi-version.apk
             abi=$(echo "$filename" | sed 's/app-default-//;s/-release-signed.apk//')
             dst="mpvNAS-Player-${abi}-${VERSION_TAG}.apk"
             cp "$src" "$dst"
-            sha256sum "$dst" | awk '{ print $1 }' > "${dst}.sha256"
             echo "✅ Created $dst"
           done
 
@@ -73,9 +77,6 @@ jobs:
             ### 🚀 mpv NAS Player ${{ github.ref_name }} 正式版
             
             基于最新 **mpv v0.41.0** 与 **FFmpeg 8.x** 核心构建。
-            
-            #### 📦 资产校验 (SHA-256)
-            下载后请比对各版本校验码确保文件完整性。
           files: |
             mpvNAS-Player-*.apk
           draft: false
