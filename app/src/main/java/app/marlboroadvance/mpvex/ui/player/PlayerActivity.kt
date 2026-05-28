@@ -55,6 +55,7 @@ import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -247,6 +248,11 @@ class PlayerActivity :
   private var savePlaybackStateJob: kotlinx.coroutines.Job? = null // Track ongoing save job
   private var wasPlayingBeforePause = false // Track if video was playing before pause
 
+  /**
+   * Custom CoroutineScope for operations that must survive Activity lifecycle cancellation (e.g. saving state).
+   */
+  private val playerScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+
   // ==================== Background Playback ====================
 
   /**
@@ -403,30 +409,65 @@ class PlayerActivity :
       }
     }
 
-    // Only auto-generate playlist from folder if playlist mode is enabled and no playlist_id
-    if (playlist.isEmpty() && playlistId == null && playerPreferences.playlistMode.get()) {
-      val path = parsePathFromIntent(intent)
-      val networkFilePath = intent.getStringExtra("network_file_path")
-      val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+    val dataUri = intent.data ?: intent.getStringExtra("uri")?.toUri()
+    val isMpvnas = dataUri?.scheme == "mpvnas"
 
-      if (networkFilePath != null && networkConnectionId != -1L) {
-        generatePlaylistFromNetworkFolder(networkConnectionId, networkFilePath)
-      } else if (path != null) {
-        generatePlaylistFromFolder(path)
+    if (isMpvnas) {
+      intent.data = dataUri
+      lifecycleScope.launch(Dispatchers.Main) {
+        val resolvedUri = withContext(Dispatchers.IO) {
+          dataUri?.let { resolveMpvnasUri(it) }
+        }
+        if (resolvedUri != null) {
+          intent.data = resolvedUri
+          
+          fileName = getFileName(intent)
+          if (fileName.isBlank()) {
+            fileName = intent.data?.lastPathSegment ?: "Unknown Video"
+          }
+          mediaIdentifier = getMediaIdentifier(intent, fileName)
+
+          if (playlist.isEmpty() && playlistId == null && playerPreferences.playlistMode.get()) {
+            val networkFilePath = intent.getStringExtra("network_file_path")
+            val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+            if (networkFilePath != null && networkConnectionId != -1L) {
+              generatePlaylistFromNetworkFolder(networkConnectionId, networkFilePath)
+            }
+          }
+
+          setHttpHeadersFromExtras(intent.extras)
+          getPlayableUri(intent)?.let(player::playFile)
+        } else {
+          Log.e(TAG, "Failed to resolve mpvnas URI: ${intent.data}")
+          finish()
+        }
       }
+    } else {
+      // Only auto-generate playlist from folder if playlist mode is enabled and no playlist_id
+      if (playlist.isEmpty() && playlistId == null && playerPreferences.playlistMode.get()) {
+        val path = parsePathFromIntent(intent)
+        val networkFilePath = intent.getStringExtra("network_file_path")
+        val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+
+        if (networkFilePath != null && networkConnectionId != -1L) {
+          generatePlaylistFromNetworkFolder(networkConnectionId, networkFilePath)
+        } else if (path != null) {
+          generatePlaylistFromFolder(path)
+        }
+      }
+
+      // Extract fileName early so it's available when video loads
+      fileName = getFileName(intent)
+      if (fileName.isBlank()) {
+        fileName = intent.data?.lastPathSegment ?: "Unknown Video"
+      }
+      mediaIdentifier = getMediaIdentifier(intent, fileName)
+
+      // Set HTTP headers (including referer) BEFORE playing the file
+      setHttpHeadersFromExtras(intent.extras)
+
+      getPlayableUri(intent)?.let(player::playFile)
     }
-
-    // Extract fileName early so it's available when video loads
-    fileName = getFileName(intent)
-    if (fileName.isBlank()) {
-      fileName = intent.data?.lastPathSegment ?: "Unknown Video"
-    }
-    mediaIdentifier = getMediaIdentifier(intent, fileName)
-
-    // Set HTTP headers (including referer) BEFORE playing the file
-    setHttpHeadersFromExtras(intent.extras)
-
-    getPlayableUri(intent)?.let(player::playFile)
 
     // Only set orientation immediately if NOT in Video mode
     // For Video mode, wait for video-params/aspect to become available
@@ -619,6 +660,8 @@ class PlayerActivity :
         }
         Log.d(TAG, "Save playback state job completed")
       }
+
+      playerScope.cancel()
 
       cleanupMPV()
       cleanupAudio()
@@ -2019,6 +2062,9 @@ class PlayerActivity :
   private fun saveVideoPlaybackState(mediaTitle: String) {
     if (mediaIdentifier.isBlank()) return
 
+    // Capture current track selection manually in session memory
+    trackSelector.saveCurrentTrackSelection()
+
     // Capture all necessary state variables SYNCHRONOUSLY before launching the coroutine.
     // This prevents a race condition where mediaIdentifier or other values are updated
     // for the NEXT video before the coroutine for the CURRENT video runs.
@@ -2038,8 +2084,8 @@ class PlayerActivity :
     // Cancel any previous pending save operation
     savePlaybackStateJob?.cancel()
 
-    // Launch new save job and track it
-    savePlaybackStateJob = lifecycleScope.launch(Dispatchers.IO) {
+    // Launch new save job and track it using non-cancelling playerScope
+    savePlaybackStateJob = playerScope.launch(Dispatchers.IO) {
       runCatching {
         val oldState = playbackStateRepository.getVideoDataByTitle(currentIdentifier)
         Log.d(TAG, "Saving playback state for: $mediaTitle (identifier: $currentIdentifier)")
@@ -2214,7 +2260,13 @@ class PlayerActivity :
         return@runCatching
       }
 
-      val filePath =
+      val networkFilePath = intent.getStringExtra("network_file_path")
+      val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+
+      val filePath = if (networkConnectionId != -1L && networkFilePath != null) {
+        val cleanPath = if (networkFilePath.startsWith("/")) networkFilePath else "/$networkFilePath"
+        "mpvnas://$networkConnectionId$cleanPath"
+      } else {
         when (uri.scheme) {
           "file" -> {
             uri.path ?: uri.toString()
@@ -2242,6 +2294,7 @@ class PlayerActivity :
             uri.toString()
           }
         }
+      }
 
       val launchSource =
         when {
@@ -2369,29 +2422,68 @@ class PlayerActivity :
       }
     }
 
-    // Auto-generate playlist from folder if playlist mode is enabled and no playlist_id
-    if (playlist.isEmpty() && playlistId == null && playerPreferences.playlistMode.get()) {
-      val path = parsePathFromIntent(intent)
-      if (path != null) {
-        generatePlaylistFromFolder(path)
+    val dataUri = intent.data ?: intent.getStringExtra("uri")?.toUri()
+    val isMpvnas = dataUri?.scheme == "mpvnas"
+
+    if (isMpvnas) {
+      intent.data = dataUri
+      lifecycleScope.launch(Dispatchers.Main) {
+        val resolvedUri = withContext(Dispatchers.IO) {
+          dataUri?.let { resolveMpvnasUri(it) }
+        }
+        if (resolvedUri != null) {
+          intent.data = resolvedUri
+          
+          fileName = getFileName(intent)
+          if (fileName.isBlank()) {
+            fileName = intent.data?.lastPathSegment ?: "Unknown Video"
+          }
+          mediaIdentifier = getMediaIdentifier(intent, fileName)
+
+          if (playlist.isEmpty() && playlistId == null && playerPreferences.playlistMode.get()) {
+            val networkFilePath = intent.getStringExtra("network_file_path")
+            val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+            if (networkFilePath != null && networkConnectionId != -1L) {
+              generatePlaylistFromNetworkFolder(networkConnectionId, networkFilePath)
+            }
+          }
+
+          setHttpHeadersFromExtras(intent.extras)
+
+          getPlayableUri(intent)?.let { uri ->
+            lifecycleScope.launch(Dispatchers.Default) {
+              MPVLib.command("loadfile", uri)
+            }
+          }
+        } else {
+          Log.e(TAG, "Failed to resolve mpvnas URI in onNewIntent: ${intent.data}")
+        }
       }
-    }
+    } else {
+      // Auto-generate playlist from folder if playlist mode is enabled and no playlist_id
+      if (playlist.isEmpty() && playlistId == null && playerPreferences.playlistMode.get()) {
+        val path = parsePathFromIntent(intent)
+        if (path != null) {
+          generatePlaylistFromFolder(path)
+        }
+      }
 
-    // Extract the new fileName before loading the file
-    fileName = getFileName(intent)
-    if (fileName.isBlank()) {
-      fileName = intent.data?.lastPathSegment ?: "Unknown Video"
-    }
-    mediaIdentifier = getMediaIdentifier(intent, fileName)
+      // Extract the new fileName before loading the file
+      fileName = getFileName(intent)
+      if (fileName.isBlank()) {
+        fileName = intent.data?.lastPathSegment ?: "Unknown Video"
+      }
+      mediaIdentifier = getMediaIdentifier(intent, fileName)
 
-    // Set HTTP headers (including referer) BEFORE loading the new file
-    setHttpHeadersFromExtras(intent.extras)
+      // Set HTTP headers (including referer) BEFORE loading the new file
+      setHttpHeadersFromExtras(intent.extras)
 
-    // Load the new file
-    getPlayableUri(intent)?.let { uri ->
-      // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
-      lifecycleScope.launch(Dispatchers.Default) {
-        MPVLib.command("loadfile", uri)
+      // Load the new file
+      getPlayableUri(intent)?.let { uri ->
+        // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
+        lifecycleScope.launch(Dispatchers.Default) {
+          MPVLib.command("loadfile", uri)
+        }
       }
     }
   }
@@ -3182,7 +3274,14 @@ class PlayerActivity :
     name: String,
   ) {
     runCatching {
-      val filePath = playlistNetworkFilePaths[uri] ?:
+      val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+      val networkFilePath = playlistNetworkFilePaths[uri] ?: intent.getStringExtra("network_file_path")
+
+      val filePath = if (networkConnectionId != -1L && networkFilePath != null) {
+        val cleanPath = if (networkFilePath.startsWith("/")) networkFilePath else "/$networkFilePath"
+        "mpvnas://$networkConnectionId$cleanPath"
+      } else {
+        playlistNetworkFilePaths[uri] ?:
         when (uri.scheme) {
           "file" -> {
             uri.path ?: uri.toString()
@@ -3210,6 +3309,7 @@ class PlayerActivity :
             uri.toString()
           }
         }
+      }
 
       // Get parsed video title from MPV
       val videoTitle = runCatching {
@@ -3367,6 +3467,66 @@ class PlayerActivity :
       }.onFailure { e ->
         Log.e(TAG, "Failed to auto-generate playlist", e)
       }
+    }
+  }
+
+  private suspend fun resolveMpvnasUri(uri: Uri): Uri? {
+    if (uri.scheme != "mpvnas") return null
+    val connectionIdStr = uri.host ?: return null
+    val connectionId = connectionIdStr.toLongOrNull() ?: return null
+    val networkFilePath = uri.path ?: ""
+    if (networkFilePath.isEmpty()) return null
+
+    try {
+      val connection = networkRepository.getConnectionById(connectionId) ?: return null
+      
+      val parentPath = if (networkFilePath.contains("/")) {
+        networkFilePath.substringBeforeLast("/")
+      } else {
+        ""
+      }
+
+      val filesResult = networkRepository.listFiles(connection, parentPath)
+      val files = filesResult.getOrNull()
+      val file = files?.find { it.path == networkFilePath }
+
+      val fileName = file?.name ?: networkFilePath.substringAfterLast("/")
+      val fileSize = file?.size ?: -1L
+      val mimeType = file?.mimeType ?: "video/mp4"
+
+      val useProxy = connection.protocol in setOf(
+        app.marlboroadvance.mpvex.domain.network.NetworkProtocol.SMB,
+        app.marlboroadvance.mpvex.domain.network.NetworkProtocol.FTP,
+        app.marlboroadvance.mpvex.domain.network.NetworkProtocol.WEBDAV
+      )
+
+      val resolvedUri = if (useProxy) {
+        val proxy = app.marlboroadvance.mpvex.ui.browser.networkstreaming.proxy.NetworkStreamingProxy.getInstance()
+        val streamId = "${connectionId}_${System.currentTimeMillis()}_${networkFilePath.hashCode()}"
+        val proxyUrl = proxy.registerStream(
+          streamId = streamId,
+          connection = connection,
+          filePath = networkFilePath,
+          fileSize = fileSize,
+          mimeType = mimeType,
+          title = fileName
+        )
+        registeredStreamIds.add(streamId)
+        Uri.parse(proxyUrl)
+      } else {
+        app.marlboroadvance.mpvex.ui.browser.networkstreaming.NetworkStreamingProvider.setConnection(connectionId, connection)
+        app.marlboroadvance.mpvex.ui.browser.networkstreaming.NetworkStreamingProvider.getUri(this, connectionId, networkFilePath)
+      }
+
+      intent.putExtra("network_file_path", networkFilePath)
+      intent.putExtra("network_connection_id", connectionId)
+      intent.putExtra("title", fileName)
+      intent.putExtra("filename", fileName)
+
+      return resolvedUri
+    } catch (e: Exception) {
+      Log.e(TAG, "Failed to resolve mpvnas URI: $uri", e)
+      return null
     }
   }
 

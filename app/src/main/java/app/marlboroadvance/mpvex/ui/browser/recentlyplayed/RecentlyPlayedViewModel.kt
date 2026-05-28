@@ -29,6 +29,7 @@ class RecentlyPlayedViewModel(application: Application) : AndroidViewModel(appli
   private val recentlyPlayedRepository by inject<RecentlyPlayedRepository>(RecentlyPlayedRepository::class.java)
   private val playlistRepository by inject<PlaylistRepository>(PlaylistRepository::class.java)
   private val metadataCache by inject<VideoMetadataCacheRepository>(VideoMetadataCacheRepository::class.java)
+  private val networkRepository by inject<app.marlboroadvance.mpvex.repository.NetworkRepository>(app.marlboroadvance.mpvex.repository.NetworkRepository::class.java)
 
   private val _recentItems = MutableStateFlow<List<RecentlyPlayedItem>>(emptyList())
   val recentItems: StateFlow<List<RecentlyPlayedItem>> = _recentItems.asStateFlow()
@@ -121,7 +122,8 @@ class RecentlyPlayedViewModel(application: Application) : AndroidViewModel(appli
         val isNetworkUri = filePath.startsWith("http://", ignoreCase = true) ||
           filePath.startsWith("https://", ignoreCase = true) ||
           filePath.startsWith("rtmp://", ignoreCase = true) ||
-          filePath.startsWith("rtsp://", ignoreCase = true)
+          filePath.startsWith("rtsp://", ignoreCase = true) ||
+          filePath.startsWith("mpvnas://", ignoreCase = true)
 
         // Skip any kind of streaming playlist entries
         if (isStreamingPlaylist(filePath)) {
@@ -240,7 +242,7 @@ class RecentlyPlayedViewModel(application: Application) : AndroidViewModel(appli
   /**
    * Creates a Video object from a network URL
    */
-  private fun createNetworkVideoFromUrl(
+  private suspend fun createNetworkVideoFromUrl(
     url: String,
     parsedVideoTitle: String?,
     entity: RecentlyPlayedEntity?,
@@ -264,7 +266,17 @@ class RecentlyPlayedViewModel(application: Application) : AndroidViewModel(appli
     
     // Use host as bucket ID (grouping by domain)
     val bucketId = (uri.host ?: "network").hashCode().toString()
-    val bucketDisplayName = uri.host ?: "Network Streams"
+    var bucketDisplayName = uri.host ?: "Network Streams"
+
+    if (uri.scheme == "mpvnas") {
+      val connectionId = uri.host?.toLongOrNull()
+      if (connectionId != null) {
+        val connection = networkRepository.getConnectionById(connectionId)
+        if (connection != null) {
+          bucketDisplayName = connection.name
+        }
+      }
+    }
     
     // Determine mime type based on URL extension, default to generic video
     val extension = uri.lastPathSegment?.substringAfterLast('.', "")?.lowercase() ?: ""
@@ -327,7 +339,8 @@ class RecentlyPlayedViewModel(application: Application) : AndroidViewModel(appli
             val isNetworkUri = video.path.startsWith("http://", ignoreCase = true) ||
               video.path.startsWith("https://", ignoreCase = true) ||
               video.path.startsWith("rtmp://", ignoreCase = true) ||
-              video.path.startsWith("rtsp://", ignoreCase = true)
+              video.path.startsWith("rtsp://", ignoreCase = true) ||
+              video.path.startsWith("mpvnas://", ignoreCase = true)
 
             if (!isNetworkUri) {
               val (deleted, failed) =

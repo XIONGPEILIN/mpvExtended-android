@@ -34,8 +34,10 @@ object RecentlyPlayedOps {
 
     val uri = Uri.parse(filePath)
 
-    if (uri.scheme in listOf("smb", "ftp", "ftps", "webdav", "webdavs")) return
-    if (uri.host?.lowercase() in listOf("127.0.0.1", "localhost", "0.0.0.0")) return
+    if (uri.scheme != "mpvnas") {
+      if (uri.scheme in listOf("smb", "ftp", "ftps", "webdav", "webdavs")) return
+      if (uri.host?.lowercase() in listOf("127.0.0.1", "localhost", "0.0.0.0")) return
+    }
 
     repository.addRecentlyPlayed(
       filePath,
