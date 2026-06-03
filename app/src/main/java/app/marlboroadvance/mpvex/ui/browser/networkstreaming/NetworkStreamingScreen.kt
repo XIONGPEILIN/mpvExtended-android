@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentPaste
@@ -24,7 +23,6 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SignalWifiConnectedNoInternet4
 import androidx.compose.material.icons.rounded.SignalWifiStatusbarConnectedNoInternet4
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Card
@@ -38,7 +36,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -52,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.res.stringResource
@@ -68,9 +66,6 @@ import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.utils.media.MediaUtils
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import org.koin.compose.koinInject
-import app.marlboroadvance.mpvex.preferences.FolderViewMode
-
 @Serializable
 object NetworkStreamingScreen : Screen {
   @OptIn(ExperimentalMaterial3Api::class)
@@ -83,7 +78,6 @@ object NetworkStreamingScreen : Screen {
 
     val connections by viewModel.connections.collectAsState()
     val connectionStatuses by viewModel.connectionStatuses.collectAsState()
-    val browserPreferences = koinInject<app.marlboroadvance.mpvex.preferences.BrowserPreferences>()
     var showAddSheet by remember { mutableStateOf(false) }
     var editingConnection by remember { mutableStateOf<NetworkConnection?>(null) }
     var copyingConnection by remember { mutableStateOf<NetworkConnection?>(null) }
@@ -158,7 +152,7 @@ object NetworkStreamingScreen : Screen {
       },
     ) { padding ->
       LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Adaptive(minSize = 360.dp),
         state = gridState,
         modifier = Modifier
           .fillMaxSize()
@@ -173,7 +167,7 @@ object NetworkStreamingScreen : Screen {
         verticalArrangement = Arrangement.spacedBy(16.dp),
       ) {
           // Section 1: Stream Link
-          item(span = { GridItemSpan(2) }) {
+          item(span = { GridItemSpan(maxLineSpan) }) {
             StreamLinkSection(
               onPlayLink = { url ->
                 MediaUtils.playFile(url, context, "network_stream")
@@ -182,7 +176,7 @@ object NetworkStreamingScreen : Screen {
           }
 
           // Section 2: Local Network header
-          item(span = { GridItemSpan(2) }) {
+          item(span = { GridItemSpan(maxLineSpan) }) {
             Spacer(modifier = Modifier.height(24.dp))
             Text(
               text = stringResource(R.string.local_network),
@@ -195,7 +189,7 @@ object NetworkStreamingScreen : Screen {
 
           // Show empty state or connection list
           if (connections.isEmpty()) {
-            item(span = { GridItemSpan(2) }) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
               Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
