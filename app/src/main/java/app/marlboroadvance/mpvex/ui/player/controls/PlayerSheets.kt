@@ -92,7 +92,21 @@ fun PlayerSheets(
 
       var showFilePicker by remember { mutableStateOf(false) }
 
-      if (showFilePicker) {
+      // When streaming from a network share, browse the remote directory instead of
+      // local storage. mpv can't open smb:// directly, so the file is loaded via proxy.
+      val isNetworkPlayback = viewModel.networkConnectionId != -1L
+
+      if (showFilePicker && isNetworkPlayback) {
+          app.marlboroadvance.mpvex.ui.browser.dialogs.NetworkSubtitlePickerDialog(
+              initialPath = viewModel.networkBaseDir ?: "",
+              listFiles = { path -> viewModel.listNetworkFiles(path) },
+              onFileSelected = { file ->
+                  showFilePicker = false
+                  viewModel.addNetworkSubtitle(file)
+              },
+              onDismiss = { showFilePicker = false },
+          )
+      } else if (showFilePicker) {
           app.marlboroadvance.mpvex.ui.browser.dialogs.FilePickerDialog(
               isOpen = true,
               currentPath = savedPickerPath ?: android.os.Environment.getExternalStorageDirectory().absolutePath,

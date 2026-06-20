@@ -261,6 +261,8 @@ class PlayerActivity :
   private var noisyReceiverRegistered = false
   private var mpvInitialized = false // Track MPV initialization state
   private var savePlaybackStateJob: kotlinx.coroutines.Job? = null // Track ongoing save job
+  private var savePlaybackStateJobIdentifier: String? = null // Media identifier the ongoing save belongs to
+  private var audioFocusActive = false // Whether we currently hold audio focus
   private var wasPlayingBeforePause = false // Track if video was playing before pause
 
   /**
@@ -625,6 +627,7 @@ class PlayerActivity :
     return when (result) {
       AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> {
         restoreAudioFocus = {}
+        audioFocusActive = true
         true
       }
 
@@ -678,10 +681,10 @@ class PlayerActivity :
       savePlaybackStateJob?.let { job ->
         Log.d(TAG, "Waiting for save playback state job to complete...")
         runCatching {
-          // Use runBlocking to ensure we wait for the job to finish
-          // This is safe here as onDestroy is already on the main thread
+          // Wait for the save to finish, but bound it so a slow network/DB write can't
+          // ANR the main thread during teardown.
           kotlinx.coroutines.runBlocking {
-            job.join()
+            kotlinx.coroutines.withTimeoutOrNull(3000) { job.join() }
           }
         }
         Log.d(TAG, "Save playback state job completed")
@@ -738,9 +741,12 @@ class PlayerActivity :
   }
 
   override fun abandonAudioFocus() {
-    if (restoreAudioFocus != {}) {
+    // Previously guarded by `restoreAudioFocus != {}`, which compared two distinct lambda
+    // instances and was therefore always true. Track focus state explicitly instead.
+    if (audioFocusActive) {
       audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
       restoreAudioFocus = {}
+      audioFocusActive = false
     }
   }
 
@@ -1803,8 +1809,10 @@ class PlayerActivity :
       // Load playback state (will skip track restoration if preferred language configured)
       val hasState = loadVideoPlaybackState(fileName)
 
-      // Apply track selection logic (defaults only apply when no saved state)
-      trackSelector.onFileLoaded(hasState)
+      // Apply track selection logic (defaults only apply when no saved state).
+      // Pass the directory/playlist scope so a carried-over subtitle/audio choice only
+      // follows within the same folder/playlist (and not into an unrelated file).
+      trackSelector.onFileLoaded(hasState, currentTrackScopeKey())
 
       // Apply default zoom only if there's no saved state
       if (!hasState) {
@@ -1819,7 +1827,7 @@ class PlayerActivity :
       withContext(Dispatchers.Main) {
         val savedAspect = playerPreferences.defaultVideoAspect.get()
         val savedCustomRatio = playerPreferences.defaultCustomAspectRatio.get()
-        
+
         if (savedCustomRatio > 0) {
           // Apply custom aspect ratio
           viewModel.setCustomAspectRatio(savedCustomRatio)
@@ -1827,6 +1835,14 @@ class PlayerActivity :
           // Apply standard aspect mode (Fit, Crop, or Stretch)
           viewModel.changeVideoAspect(savedAspect, showUpdate = false)
         }
+      }
+
+      // Autoload sibling subtitle files (local + network), then re-run subtitle
+      // selection so a remembered external/track choice can match a sub that only
+      // became available after the async autoload completed.
+      if (subtitlesPreferences.autoloadMatchingSubtitles.get()) {
+        autoloadMatchingSubtitlesForCurrent()
+        trackSelector.reselectSubtitlesNow(hasState)
       }
     }
 
@@ -1875,31 +1891,13 @@ class PlayerActivity :
 
     viewModel.unpause()
 
-    if (subtitlesPreferences.autoloadMatchingSubtitles.get()) {
-      lifecycleScope.launch {
-        // For network files played via proxy (SMB/WebDAV/FTP), use the original network file path
-        val currentUri = playlist.getOrNull(playlistIndex) ?: intent.data
-        val networkFilePath = currentUri?.let { playlistNetworkFilePaths[it] } ?: intent.getStringExtra("network_file_path")
-        val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
-
-        if (networkFilePath != null && networkConnectionId != -1L) {
-          // Pass network file path and connection ID for subtitle discovery
-          SubtitleOps.autoloadSubtitles(
-            videoFilePath = networkFilePath,
-            videoFileName = fileName,
-            networkConnectionId = networkConnectionId,
-          )
-        } else {
-          // Regular file or direct network stream
-          val filePath = parsePathFromIntent(intent)
-          if (filePath != null) {
-            SubtitleOps.autoloadSubtitles(
-              videoFilePath = filePath,
-              videoFileName = fileName,
-            )
-          }
-        }
-      }
+    // Publish network playback context so the "add external subtitle" picker can browse
+    // the remote share (instead of local storage) when streaming from SMB/WebDAV/FTP.
+    run {
+      val currentUri = playlist.getOrNull(playlistIndex) ?: intent.data
+      val networkFilePath = currentUri?.let { playlistNetworkFilePaths[it] } ?: intent.getStringExtra("network_file_path")
+      val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+      viewModel.setNetworkContext(networkConnectionId, networkFilePath)
     }
 
     updateMediaSessionMetadata(
@@ -1910,6 +1908,37 @@ class PlayerActivity :
 
     // Asynchronously fetch better filename from HTTP headers for network streams
     fetchNetworkStreamTitle()
+  }
+
+  /**
+   * Autoloads sibling subtitle files for the currently loaded media.
+   * For SMB/WebDAV/FTP this scans the original network directory via the network client;
+   * for local files it scans the parent directory. Suspends until the sub-add commands
+   * have been issued so callers can safely re-run subtitle selection afterwards.
+   */
+  private suspend fun autoloadMatchingSubtitlesForCurrent() {
+    // For network files played via proxy (SMB/WebDAV/FTP), use the original network file path
+    val currentUri = playlist.getOrNull(playlistIndex) ?: intent.data
+    val networkFilePath = currentUri?.let { playlistNetworkFilePaths[it] } ?: intent.getStringExtra("network_file_path")
+    val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+
+    if (networkFilePath != null && networkConnectionId != -1L) {
+      // Pass network file path and connection ID for subtitle discovery
+      SubtitleOps.autoloadSubtitles(
+        videoFilePath = networkFilePath,
+        videoFileName = fileName,
+        networkConnectionId = networkConnectionId,
+      )
+    } else {
+      // Regular file or direct network stream
+      val filePath = parsePathFromIntent(intent)
+      if (filePath != null) {
+        SubtitleOps.autoloadSubtitles(
+          videoFilePath = filePath,
+          videoFileName = fileName,
+        )
+      }
+    }
   }
 
   private fun logActiveRenderer() {
@@ -2158,8 +2187,13 @@ class PlayerActivity :
     val currentAudioDelay = ((MPVLib.getPropertyDouble("audio-delay") ?: 0.0) * MILLISECONDS_TO_SECONDS).toInt()
     val currentExternalSubs = viewModel.externalSubtitles.toList() // Copy the list
 
-    // Cancel any previous pending save operation
-    savePlaybackStateJob?.cancel()
+    // Only supersede a still-pending save for the SAME media (to keep the latest position).
+    // Cancelling a *different* file's save (e.g. during a playlist transition) could drop
+    // its write mid-flight, so leave it running to completion.
+    if (savePlaybackStateJobIdentifier == currentIdentifier) {
+      savePlaybackStateJob?.cancel()
+    }
+    savePlaybackStateJobIdentifier = currentIdentifier
 
     // Launch new save job and track it using non-cancelling playerScope
     savePlaybackStateJob = playerScope.launch(Dispatchers.IO) {
@@ -3582,6 +3616,22 @@ class PlayerActivity :
     } else {
       fileName
     }
+  }
+
+  /**
+   * A stable key identifying the directory / playlist context of the currently playing
+   * media. Items in the same folder (local) or same network directory share a key, while
+   * an unrelated standalone file gets a different key. Used to scope session track memory.
+   */
+  private fun currentTrackScopeKey(): String {
+    val connId = intent.getLongExtra("network_connection_id", -1L)
+    val netPath = currentCanonicalNetworkPath()
+    if (connId != -1L && netPath != null) {
+      return "net:$connId:${NetworkMediaIdUtils.parentPath(netPath)}"
+    }
+    val localPath = parsePathFromIntent(intent)
+    val parent = localPath?.substringBeforeLast('/', "")?.takeIf { it.isNotBlank() }
+    return "local:${parent ?: mediaIdentifier}"
   }
 
   private fun currentCanonicalNetworkPath(): String? {

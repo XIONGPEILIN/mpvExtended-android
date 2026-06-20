@@ -1,6 +1,5 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients
 
-import android.net.Uri
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import com.hierynomus.msfscc.fileinformation.FileBasicInformation
@@ -63,14 +62,18 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
   private var diskShare: DiskShare? = null
   private var baseUrl: String = ""
   private var resolvedHostIp: String = ""
+  // The actual SMB share name (first path segment only). SMB shares cannot contain slashes.
   private var shareName: String = ""
-  private var rootPath: String = ""
+  // Optional sub-directory within the share that this connection is rooted at (no leading/trailing slash).
+  private var basePath: String = ""
 
   override suspend fun connect(): Result<Unit> =
     connectMutex.withLock {
       withContext(Dispatchers.IO) {
         try {
           if (isConnected()) return@withContext Result.success(Unit)
+          // A previous half-open connection may still be lingering; tear it down first.
+          disconnect()
           val client = getOrCreateClient()
           val resolvedAddress = try {
             withTimeout(5000) { java.net.InetAddress.getByName(connection.host) }
@@ -79,13 +82,14 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
           }
           val hostForUrl = resolvedAddress.hostAddress ?: connection.host
           resolvedHostIp = hostForUrl
-          val parts = connection.path.trim('/').split('/', limit = 2)
-          shareName = parts[0]
-          rootPath = parts.getOrElse(1) { "" }
+          // connection.path may be "share", "share/sub/dir", "/share/sub/", or use backslashes.
+          // The SMB share is ONLY the first segment; the remainder is the rooted sub-directory.
+          val normalizedPath = connection.path.replace('\\', '/').trim('/')
+          shareName = normalizedPath.substringBefore('/')
+          basePath = normalizedPath.substringAfter('/', "").trim('/')
           baseUrl = "smb://${hostForUrl}${if (connection.port != 445) ":${connection.port}" else ""}/${shareName}"
-          if (rootPath.isNotEmpty()) baseUrl += "/$rootPath"
           smbConnection = client.connect(hostForUrl, connection.port)
-          val authContext = if (connection.isAnonymous) AuthenticationContext.anonymous() 
+          val authContext = if (connection.isAnonymous) AuthenticationContext.anonymous()
                             else AuthenticationContext(connection.username, connection.password.toCharArray(), null)
           session = smbConnection!!.authenticate(authContext)
           diskShare = session!!.connectShare(shareName) as DiskShare
@@ -105,7 +109,40 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
     }
   }
 
-  override fun isConnected(): Boolean = session != null && smbConnection != null && smbConnection!!.isConnected
+  override fun isConnected(): Boolean =
+    session != null && smbConnection?.isConnected == true && diskShare?.isConnected == true
+
+  /**
+   * Ensures a live connection, forcing a full reconnect if the previous session/share
+   * has gone stale (e.g. the server dropped an idle SMB session, which surfaces as
+   * STATUS_ACCESS_DENIED on subsequent operations).
+   */
+  private suspend fun reconnect(): Result<Unit> {
+    disconnect()
+    return connect()
+  }
+
+  /**
+   * Runs an operation against the disk share, transparently reconnecting and retrying
+   * once if the share/session has been invalidated by the server.
+   */
+  private suspend fun <T> withShare(block: (DiskShare) -> T): Result<T> {
+    var lastError: Exception? = null
+    for (attempt in 0..1) {
+      try {
+        if (!isConnected()) {
+          (if (attempt == 0) connect() else reconnect()).getOrThrow()
+        }
+        val ds = diskShare ?: throw IllegalStateException("Not connected")
+        return Result.success(block(ds))
+      } catch (e: Exception) {
+        lastError = e
+        // Drop the stale connection so the next attempt establishes a fresh session.
+        disconnect()
+      }
+    }
+    return Result.failure(lastError ?: Exception("Not connected"))
+  }
 
   private fun getRelativePath(path: String): String {
     return when {
@@ -125,21 +162,27 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
     }
   }
 
+  /**
+   * Resolves a browse path to a path relative to the connected share, substituting the
+   * connection's rooted sub-directory ([basePath]) when browsing the connection root.
+   */
+  private fun resolveSharePath(path: String): String {
+    val rel = getRelativePath(path)
+    return if (rel.isEmpty()) basePath else rel
+  }
+
   override suspend fun listFiles(path: String): Result<List<NetworkFile>> =
     withContext(Dispatchers.IO) {
-      try {
-        if (!isConnected()) connect().getOrThrow()
-        val ds = diskShare ?: return@withContext Result.failure(Exception("Not connected"))
-        var relativePath = getRelativePath(path)
-        if (rootPath.isNotEmpty() && relativePath.isEmpty()) relativePath = rootPath
-        val rawFiles = withTimeout(15000) { ds.list(relativePath) }
-        val files = rawFiles.mapNotNull { fileInfo ->
+      withShare { ds ->
+        val relativePath = resolveSharePath(path)
+        val rawFiles = ds.list(relativePath)
+        rawFiles.mapNotNull { fileInfo ->
           val fileName = fileInfo.fileName
           if (fileName == "." || fileName == ".." || fileName.endsWith("$")) return@mapNotNull null
           val isDirectory = fileInfo.fileAttributes and 0x10 != 0L
           NetworkFile(
             name = fileName,
-            path = if (relativePath.isEmpty()) "smb://${resolvedHostIp}/${shareName}/${fileName}" 
+            path = if (relativePath.isEmpty()) "smb://${resolvedHostIp}/${shareName}/${fileName}"
                    else "smb://${resolvedHostIp}/${shareName}/${relativePath}/${fileName}",
             isDirectory = isDirectory,
             size = if (isDirectory) 0 else fileInfo.endOfFile,
@@ -147,28 +190,23 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
             mimeType = if (!isDirectory) getMimeType(fileName) else null,
           )
         }
-        Result.success(files)
-      } catch (e: Exception) { Result.failure(e) }
+      }
     }
 
   override suspend fun getFileSize(path: String): Result<Long> =
     withContext(Dispatchers.IO) {
-      try {
-        if (!isConnected()) connect().getOrThrow()
-        val ds = diskShare ?: return@withContext Result.failure(Exception("Not connected"))
-        val file = ds.openFile(getRelativePath(path), EnumSet.of(AccessMask.GENERIC_READ), null, EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ), SMB2CreateDisposition.FILE_OPEN, null)
+      withShare { ds ->
+        val file = ds.openFile(resolveSharePath(path), EnumSet.of(AccessMask.GENERIC_READ), null, EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ), SMB2CreateDisposition.FILE_OPEN, null)
         val size = file.fileInformation.standardInformation.endOfFile
         file.close()
-        Result.success(size)
-      } catch (e: Exception) { Result.failure(e) }
+        size
+      }
     }
 
   override suspend fun getFileStream(path: String, offset: Long): Result<InputStream> =
     withContext(Dispatchers.IO) {
-      try {
-        if (!isConnected()) connect().getOrThrow()
-        val ds = diskShare ?: return@withContext Result.failure(Exception("Not connected"))
-        val file = ds.openFile(getRelativePath(path), EnumSet.of(AccessMask.GENERIC_READ), null, EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ), SMB2CreateDisposition.FILE_OPEN, null)
+      withShare { ds ->
+        val file = ds.openFile(resolveSharePath(path), EnumSet.of(AccessMask.GENERIC_READ), null, EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ), SMB2CreateDisposition.FILE_OPEN, null)
 
         // Optimized Seekable Raw Stream
         val rawSeekable = object : InputStream() {
@@ -186,37 +224,16 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
         }
         
         // Wrap with 1MB buffer for high-speed sequential access (Restore the dozens of MB/s speed)
-        Result.success(BufferedInputStream(rawSeekable, 1024 * 1024))
-      } catch (e: Exception) { Result.failure(e) }
-    }
-
-  override suspend fun getFileUri(path: String): Result<Uri> =
-    withContext(Dispatchers.IO) {
-      try {
-        val fullPath = if (path.startsWith("smb://")) path else "$baseUrl${if (path.startsWith("/")) path else "/$path"}"
-        val uriString = if (connection.isAnonymous) fullPath 
-                        else {
-                          val hostPart = "${connection.host}${if (connection.port != 445) ":${connection.port}" else ""}"
-                          val pathPart = if (path.startsWith("/")) path else "/$path"
-                          "smb://${connection.username}:${connection.password}@$hostPart${connection.path}$pathPart"
-                        }
-        Result.success(Uri.parse(uriString))
-      } catch (e: Exception) { Result.failure(e) }
+        BufferedInputStream(rawSeekable, 1024 * 1024)
+      }
     }
 
   override suspend fun deleteFile(path: String): Result<Unit> =
     withContext(Dispatchers.IO) {
-      try {
-        if (!isConnected()) connect().getOrThrow()
-        val ds = diskShare ?: return@withContext Result.failure(Exception("Not connected"))
-        val relativePath = getRelativePath(path)
-        
+      withShare { ds ->
+        val relativePath = resolveSharePath(path)
         val isDirectory = ds.folderExists(relativePath)
         deleteRecursive(ds, relativePath, isDirectory)
-        
-        Result.success(Unit)
-      } catch (e: Exception) {
-        Result.failure(e)
       }
     }
 

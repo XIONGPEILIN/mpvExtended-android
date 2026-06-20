@@ -1,12 +1,16 @@
 package app.marlboroadvance.mpvex.domain.network
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
  * Represents a network connection configuration
  */
-@Entity(tableName = "network_connections")
+@Entity(
+  tableName = "network_connections",
+  indices = [Index(value = ["autoConnect"])],
+)
 data class NetworkConnection(
   @PrimaryKey(autoGenerate = true)
   val id: Long = 0,

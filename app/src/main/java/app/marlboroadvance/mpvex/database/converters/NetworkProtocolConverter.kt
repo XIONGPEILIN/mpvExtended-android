@@ -11,5 +11,7 @@ class NetworkProtocolConverter {
   fun fromNetworkProtocol(protocol: NetworkProtocol): String = protocol.name
 
   @TypeConverter
-  fun toNetworkProtocol(value: String): NetworkProtocol = NetworkProtocol.valueOf(value)
+  fun toNetworkProtocol(value: String): NetworkProtocol =
+    // Tolerate unknown/renamed values instead of crashing every read of the table.
+    NetworkProtocol.entries.firstOrNull { it.name == value } ?: NetworkProtocol.SMB
 }

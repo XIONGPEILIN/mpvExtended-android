@@ -1,6 +1,5 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients
 
-import android.net.Uri
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import com.thegrizzlylabs.sardineandroid.DavResource
@@ -16,6 +15,17 @@ import java.util.concurrent.TimeUnit
 
 class WebDavClient(private val connection: NetworkConnection) : NetworkClient {
   private var sardine: Sardine? = null
+
+  companion object {
+    // Shared client so connection pooling/threads are reused across range requests
+    // instead of leaking a new pool+dispatcher on every getFileStream call.
+    private val sharedHttpClient: OkHttpClient by lazy {
+      OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
+    }
+  }
 
   private fun buildUrl(relativePath: String): String {
     val protocol = if (connection.useHttps) "https" else "http"
@@ -91,10 +101,7 @@ class WebDavClient(private val connection: NetworkConnection) : NetworkClient {
     withContext(Dispatchers.IO) {
       try {
         val url = buildUrl(path)
-        val okHttpClient = OkHttpClient.Builder()
-          .connectTimeout(15, TimeUnit.SECONDS)
-          .readTimeout(60, TimeUnit.SECONDS)
-          .build()
+        val okHttpClient = sharedHttpClient
 
         val requestBuilder = Request.Builder().url(url).get()
         if (offset > 0) requestBuilder.addHeader("Range", "bytes=$offset-")
@@ -119,25 +126,6 @@ class WebDavClient(private val connection: NetworkConnection) : NetworkClient {
           }
         }
         Result.success(wrappedStream)
-      } catch (e: Exception) {
-        Result.failure(e)
-      }
-    }
-
-  override suspend fun getFileUri(path: String): Result<Uri> =
-    withContext(Dispatchers.IO) {
-      try {
-        val protocol = if (connection.useHttps) "https" else "http"
-        val basePath = connection.path.trim('/')
-        val cleanPath = path.trim('/')
-        val fullPath = when {
-          cleanPath.isEmpty() -> basePath
-          basePath.isEmpty() -> cleanPath
-          else -> "$basePath/$cleanPath"
-        }
-        val uriString = if (connection.isAnonymous) "$protocol://${connection.host}:${connection.port}/$fullPath"
-                        else "$protocol://${connection.username}:${connection.password}@${connection.host}:${connection.port}/$fullPath"
-        Result.success(Uri.parse(uriString))
       } catch (e: Exception) {
         Result.failure(e)
       }

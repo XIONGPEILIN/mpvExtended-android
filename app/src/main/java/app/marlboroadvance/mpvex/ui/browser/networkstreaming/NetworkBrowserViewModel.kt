@@ -55,9 +55,15 @@ class NetworkBrowserViewModel(
 
         repository.listFiles(connection, currentPath)
           .onSuccess { fileList ->
+            // Use the same natural-order comparator the player uses when building the
+            // playlist from a network folder, so the browser order matches the in-player
+            // playlist order (e.g. ep2 before ep10).
             _files.value = fileList.sortedWith(
               compareBy<NetworkFile> { !it.isDirectory }
-                .thenBy { it.name.lowercase() },
+                .thenComparator { a, b ->
+                  app.marlboroadvance.mpvex.utils.sort.SortUtils.NaturalOrderComparator.DEFAULT
+                    .compare(a.name, b.name)
+                },
             )
           }
           .onFailure { e ->

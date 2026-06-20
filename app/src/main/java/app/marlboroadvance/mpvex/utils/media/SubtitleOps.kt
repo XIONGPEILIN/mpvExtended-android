@@ -145,8 +145,10 @@ object SubtitleOps : KoinComponent {
             .replace(" ", ".")
             .replace(Regex("[^a-zA-Z0-9._-]"), "")
 
-          // Register subtitle stream with proxy using the filename in streamId
-          val streamId = urlSafeFilename
+          // Namespace the streamId by connection + path hash so same-named subtitles in
+          // different folders (or colliding with a video stream id) don't overwrite each
+          // other in the proxy's active-stream map.
+          val streamId = "sub_${connection.id}_${subtitle.path.hashCode()}_$urlSafeFilename"
           val proxyUrl = proxy.registerStream(
             streamId = streamId,
             connection = connection,

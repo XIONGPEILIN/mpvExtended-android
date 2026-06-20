@@ -47,6 +47,11 @@ class TrackSelector(
   companion object {
     private const val TAG = "TrackSelector"
 
+    // Identifies the directory/playlist the current session memory belongs to, so a
+    // remembered choice only follows within the same folder/playlist and does not bleed
+    // into an unrelated standalone file opened later in the same app session.
+    @Volatile var sessionScope: String? = null
+
     // Session memory to remember last manual selections
     @Volatile var lastManualAudioLang: String? = null
     @Volatile var lastManualAudioTitle: String? = null
@@ -73,7 +78,15 @@ class TrackSelector(
     val image: Boolean
   )
 
-  suspend fun onFileLoaded(hasState: Boolean = false) {
+  suspend fun onFileLoaded(hasState: Boolean = false, scope: String? = null) {
+    // If we've moved to a different directory/playlist, drop the carried-over session
+    // choice so it can't override an unrelated file's own saved/auto selection.
+    if (scope != sessionScope) {
+      Log.d(TAG, "Smart Tracks: scope changed ($sessionScope -> $scope); resetting session track memory")
+      resetManualSelectionMemory()
+      sessionScope = scope
+    }
+
     var attempts = 0
     val maxAttempts = 20
     
@@ -96,6 +109,20 @@ class TrackSelector(
     }
   
     ensureAudioTrackSelected(tracks, hasState)
+    ensureSubtitleTrackSelected(tracks, hasState)
+  }
+
+  /**
+   * Re-runs subtitle selection only. Used after external subtitle files have been
+   * autoloaded asynchronously (network shares / sibling files), so that a remembered
+   * external/track choice can finally match a track that did not exist during the
+   * initial [onFileLoaded] pass.
+   */
+  suspend fun reselectSubtitlesNow(hasState: Boolean) {
+    val trackCount = MPVLib.getPropertyInt("track-list/count") ?: 0
+    if (trackCount == 0) return
+    val tracks = readTracks(trackCount)
+    if (!isVideoFile(tracks)) return
     ensureSubtitleTrackSelected(tracks, hasState)
   }
 
@@ -243,6 +270,13 @@ class TrackSelector(
     return tracks.any { it.type == "video" && !it.image }
   }
 
+  /**
+   * Returns the trailing "language tag" of a subtitle filename/title for matching the
+   * same subtitle variant across episodes, e.g. "Show.S01E02.cht.ass" -> "cht.ass".
+   */
+  private fun subtitleTag(title: String): String =
+    title.substringAfterLast('/').substringAfterLast('\\').split('.').takeLast(2).joinToString(".")
+
   private fun isAnimeFolder(path: String?): Boolean {
     if (path == null) return false
     val p = path.lowercase()
@@ -385,12 +419,97 @@ class TrackSelector(
   // 2. SUBTITLE SELECTION LOGIC (Multi-Pass Preserved)
   // ==================================================
 
+  /**
+   * Applies a subtitle choice carried over from earlier in this play session.
+   * Returns true if a choice was applied (so the caller skips saved-state/auto logic).
+   *
+   * This deliberately runs BEFORE the saved-state branch so that a subtitle the user
+   * picked (or that was active on the previous playlist item) follows them across the
+   * playlist, instead of being overridden by a stale per-file saved track or the
+   * autoloaded first external subtitle.
+   */
+  private fun applySessionSubtitleChoice(subTracks: List<Track>): Boolean {
+    // Restore manual "subtitles off" state from the session.
+    if (lastManualSubId == -1) {
+      Log.d(TAG, "Smart Sub: Restoring manual 'subtitles off' state from session")
+      MPVLib.setPropertyString("sid", "no")
+      return true
+    }
+
+    if (lastManualSubIsExternal == true) {
+      // The remembered choice was an external (sidecar) subtitle. Its track number is
+      // not stable across videos, so match by "is external" first. If this video has no
+      // external sub yet (autoload may have found none), fall through to language/title.
+      val externals = subTracks.filter { it.external }
+      if (externals.isNotEmpty()) {
+        val rememberedLang = lastManualSubLang
+        val rememberedTitle = lastManualSubTitle
+        // Match the previously chosen external as closely as possible, so e.g. a
+        // Traditional-Chinese (.cht) choice isn't replaced by Simplified (.chs) on the
+        // next episode where only the episode number differs in the filename.
+        val match =
+          // 1. Identical language + title (same filename – rare across episodes)
+          externals.find { !rememberedLang.isNullOrBlank() && it.lang == rememberedLang && it.title == rememberedTitle }
+          // 2. Same language tag detected by mpv (cht / chs / eng / jpn ...)
+            ?: externals.find { !rememberedLang.isNullOrBlank() && it.lang == rememberedLang }
+          // 3. Same trailing filename tag, e.g. "cht.ass" == "cht.ass"
+            ?: rememberedTitle?.let { t -> externals.find { subtitleTag(it.title) == subtitleTag(t) } }
+          // 4. Fall back to the first external subtitle
+            ?: externals.first()
+        Log.d(TAG, "Smart Sub: Prioritizing external subtitle as requested by last manual selection (id=${match.id}, lang=${match.lang}, title=${match.title})")
+        MPVLib.setPropertyInt("sid", match.id)
+        return true
+      }
+    } else {
+      val manualSubTrackNumber = lastManualSubTrackNumber
+      if (manualSubTrackNumber != null && manualSubTrackNumber > 0) {
+        val match = subTracks.find { it.trackNumber == manualSubTrackNumber && !it.external }
+        if (match != null) {
+          Log.d(TAG, "Smart Sub: Inheriting session choice by track number (id=${match.id})")
+          MPVLib.setPropertyInt("sid", match.id)
+          return true
+        }
+      }
+    }
+
+    if (lastManualSubLang != null) {
+      val match = subTracks.find {
+        it.lang == lastManualSubLang &&
+        (lastManualSubTitle == null || it.title == lastManualSubTitle)
+      } ?: subTracks.find { it.lang == lastManualSubLang }
+
+      if (match != null) {
+        Log.d(TAG, "Smart Sub: Inheriting session choice by language/title (id=${match.id})")
+        MPVLib.setPropertyInt("sid", match.id)
+        return true
+      }
+    }
+
+    val manualSubId = lastManualSubId
+    if (manualSubId != null && manualSubId > 0) {
+      val match = subTracks.find { it.id == manualSubId }
+      if (match != null) {
+        Log.d(TAG, "Smart Sub: Inheriting session choice by track ID (id=${match.id})")
+        MPVLib.setPropertyInt("sid", match.id)
+        return true
+      }
+    }
+
+    return false
+  }
+
   private suspend fun ensureSubtitleTrackSelected(tracks: List<Track>, hasState: Boolean) {
     try {
+      val subTracks = tracks.filter { it.type == "sub" }
+
+      // Session inheritance takes priority over the per-file saved state for the subtitle
+      // TRACK choice, so a subtitle picked earlier follows across the playlist.
+      if (applySessionSubtitleChoice(subTracks)) return
+
       val currentSid = MPVLib.getPropertyInt("sid") ?: 0
 
       if (hasState) {
-        // Respect manual "Subtitles Off" state (sid = 0 or -1 in MPV)
+        // No in-session choice to inherit: respect the per-file saved selection.
         val realSid = MPVLib.getPropertyString("sid")
         if (realSid == null || realSid == "no" || currentSid <= 0) {
           Log.d(TAG, "Smart Sub: Resuming from saved state. Subtitles were disabled. Respecting choice.")
@@ -399,57 +518,6 @@ class TrackSelector(
         }
         Log.d(TAG, "Smart Sub: Resuming from saved state. Respecting current subtitle track: $currentSid")
         return
-      }
-
-      val subTracks = tracks.filter { it.type == "sub" }
-
-      // Session Priority 1: Restore last manually selected track in current session
-      if (lastManualSubId == -1) {
-        Log.d(TAG, "Smart Sub: Restoring manual 'subtitles off' state from session")
-        MPVLib.setPropertyString("sid", "no")
-        return
-      }
-
-      val manualSubTrackNumber = lastManualSubTrackNumber
-      if (manualSubTrackNumber != null && manualSubTrackNumber > 0) {
-        val match = subTracks.find { it.trackNumber == manualSubTrackNumber }
-        if (match != null) {
-          Log.d(TAG, "Smart Sub: Inheriting session choice by track number (id=${match.id})")
-          MPVLib.setPropertyInt("sid", match.id)
-          return
-        }
-      }
-
-      if (lastManualSubIsExternal == true) {
-        val externalSub = subTracks.find { it.external }
-        if (externalSub != null) {
-          Log.d(TAG, "Smart Sub: Prioritizing external subtitle as requested by last manual selection (id=${externalSub.id})")
-          MPVLib.setPropertyInt("sid", externalSub.id)
-          return
-        }
-      }
-
-      if (lastManualSubLang != null) {
-        val match = subTracks.find { 
-          it.lang == lastManualSubLang && 
-          (lastManualSubTitle == null || it.title == lastManualSubTitle) 
-        } ?: subTracks.find { it.lang == lastManualSubLang }
-
-        if (match != null) {
-          Log.d(TAG, "Smart Sub: Inheriting session choice by language/title (id=${match.id})")
-          MPVLib.setPropertyInt("sid", match.id)
-          return
-        }
-      }
-
-      val manualSubId = lastManualSubId
-      if (manualSubId != null && manualSubId > 0) {
-        val match = subTracks.find { it.id == manualSubId }
-        if (match != null) {
-          Log.d(TAG, "Smart Sub: Inheriting session choice by track ID (id=${match.id})")
-          MPVLib.setPropertyInt("sid", match.id)
-          return
-        }
       }
 
       val isAnimeContext = detectAnimeContext(tracks)

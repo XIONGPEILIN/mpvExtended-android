@@ -2,7 +2,10 @@ package app.marlboroadvance.mpvex.utils.update
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.Signature
 import android.os.Build
+import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -52,6 +55,7 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.TimeUnit
 
 // --- Data Models ---
 
@@ -77,7 +81,12 @@ data class Asset(
 class UpdateManager(
     private val context: Context
 ) {
-    private val client = OkHttpClient()
+    // Bounded timeouts so a stalled server can't hang the update flow. No callTimeout:
+    // APK downloads stream a large body and must not be aborted by a total-call deadline.
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun checkForUpdate(forceShow: Boolean = false): Release? {
@@ -244,10 +253,49 @@ class UpdateManager(
         if (!BuildConfig.ENABLE_UPDATE_FEATURE) {
             return
         }
-        
-         context.externalCacheDir?.listFiles()?.forEach { 
+
+         context.externalCacheDir?.listFiles()?.forEach {
              if (it.name.endsWith(".apk")) it.delete()
          }
+    }
+
+    /**
+     * Verifies the downloaded APK is signed by the same certificate as the currently
+     * installed app. Prevents installing a tampered/substituted APK from the cache.
+     */
+    fun verifyApkSignature(apkFile: File): Boolean {
+        return try {
+            val pm = context.packageManager
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                PackageManager.GET_SIGNING_CERTIFICATES
+            } else {
+                @Suppress("DEPRECATION")
+                PackageManager.GET_SIGNATURES
+            }
+            val apkInfo = pm.getPackageArchiveInfo(apkFile.absolutePath, flags) ?: return false
+            // The archive must declare the same package id as us.
+            if (apkInfo.packageName != context.packageName) return false
+            val installedInfo = pm.getPackageInfo(context.packageName, flags)
+            val apkSigs = signatureBytes(apkInfo)
+            val installedSigs = signatureBytes(installedInfo)
+            apkSigs.isNotEmpty() && installedSigs.isNotEmpty() &&
+                apkSigs.any { a -> installedSigs.any { it.contentEquals(a) } }
+        } catch (e: Exception) {
+            Log.e("UpdateManager", "APK signature verification error", e)
+            false
+        }
+    }
+
+    private fun signatureBytes(info: android.content.pm.PackageInfo): List<ByteArray> {
+        val sigs: Array<Signature>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val si = info.signingInfo
+            if (si == null) null
+            else if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
+        } else {
+            @Suppress("DEPRECATION")
+            info.signatures
+        }
+        return sigs?.map { it.toByteArray() } ?: emptyList()
     }
 }
 
@@ -327,7 +375,7 @@ class UpdateViewModel(application: Application) : AndroidViewModel(application) 
                     else _updateState.value = UpdateState.Idle
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("UpdateViewModel", "Update operation failed", e)
                 if (manual) _updateState.value = UpdateState.Error
                 else _updateState.value = UpdateState.Idle
             }
@@ -349,7 +397,7 @@ class UpdateViewModel(application: Application) : AndroidViewModel(application) 
                 _isDownloading.value = false
                  _updateState.value = UpdateState.ReadyToInstall(release)
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("UpdateViewModel", "Update operation failed", e)
                 _isDownloading.value = false
                 _updateState.value = UpdateState.Error 
             }
@@ -363,6 +411,13 @@ class UpdateViewModel(application: Application) : AndroidViewModel(application) 
         }
         
         val file = updateManager.getApkFile(release) ?: return
+        // Refuse to install an APK that isn't signed by our own certificate.
+        if (!updateManager.verifyApkSignature(file)) {
+            Log.e("UpdateManager", "Refusing to install update: signature mismatch")
+            updateManager.clearCache()
+            _updateState.value = UpdateState.Error
+            return
+        }
         val context = getApplication<Application>()
         val uri = FileProvider.getUriForFile(
             context,

@@ -1,6 +1,5 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients
 
-import android.net.Uri
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import kotlinx.coroutines.Dispatchers
@@ -64,13 +63,32 @@ class FtpClient(private val connection: NetworkConnection) : NetworkClient {
 
   override fun isConnected(): Boolean = ftpClient?.isConnected == true
 
+  /**
+   * Runs an operation on the control connection, transparently reconnecting and retrying
+   * once if the FTP session has been dropped (idle timeout / server reset). The socket can
+   * still report "connected" after a server-side drop, so we always retry once on failure.
+   */
+  private suspend fun <T> withFtp(block: (FTPClient) -> T): Result<T> {
+    var lastError: Exception? = null
+    for (attempt in 0..1) {
+      try {
+        if (attempt == 1 || !isConnected()) {
+          disconnect()
+          connect().getOrThrow()
+        }
+        return Result.success(block(ftpClient!!))
+      } catch (e: Exception) {
+        lastError = e
+        disconnect()
+      }
+    }
+    return Result.failure(lastError ?: Exception("Not connected"))
+  }
+
   override suspend fun listFiles(path: String): Result<List<NetworkFile>> =
     withContext(Dispatchers.IO) {
-      try {
-        if (!isConnected()) connect().getOrThrow()
-        val client = ftpClient!!
-        
-        val files = client.listFiles(path).mapNotNull { file ->
+      withFtp { client ->
+        client.listFiles(path).mapNotNull { file ->
           if (file.name == "." || file.name == "..") return@mapNotNull null
           NetworkFile(
             name = file.name,
@@ -81,25 +99,18 @@ class FtpClient(private val connection: NetworkConnection) : NetworkClient {
             mimeType = if (!file.isDirectory) getMimeType(file.name) else null,
           )
         }
-        Result.success(files)
-      } catch (e: Exception) {
-        Result.failure(e)
       }
     }
 
   override suspend fun getFileSize(path: String): Result<Long> =
     withContext(Dispatchers.IO) {
-      try {
-        if (!isConnected()) connect().getOrThrow()
-        val client = ftpClient!!
+      withFtp { client ->
         val files = client.listFiles(path)
         if (files.isNotEmpty() && !files[0].isDirectory) {
-          Result.success(files[0].size)
+          files[0].size
         } else {
-          Result.failure(Exception("File not found"))
+          throw Exception("File not found")
         }
-      } catch (e: Exception) {
-        Result.failure(e)
       }
     }
 
@@ -135,30 +146,10 @@ class FtpClient(private val connection: NetworkConnection) : NetworkClient {
       }
     }
 
-  override suspend fun getFileUri(path: String): Result<Uri> =
-    withContext(Dispatchers.IO) {
-      try {
-        val uriString = if (connection.isAnonymous) "ftp://${connection.host}:${connection.port}$path" 
-                        else "ftp://${connection.username}:${connection.password}@${connection.host}:${connection.port}$path"
-        Result.success(Uri.parse(uriString))
-      } catch (e: Exception) {
-        Result.failure(e)
-      }
-    }
-
   override suspend fun deleteFile(path: String): Result<Unit> =
     withContext(Dispatchers.IO) {
-      try {
-        if (!isConnected()) connect().getOrThrow()
-        val client = ftpClient!!
-        val success = client.deleteFile(path)
-        if (success) {
-          Result.success(Unit)
-        } else {
-          Result.failure(Exception("Failed to delete file on FTP server"))
-        }
-      } catch (e: Exception) {
-        Result.failure(e)
+      withFtp { client ->
+        if (!client.deleteFile(path)) throw Exception("Failed to delete file on FTP server")
       }
     }
 

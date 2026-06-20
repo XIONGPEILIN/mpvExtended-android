@@ -202,19 +202,9 @@ class NetworkRepository(
       // Always fetch the latest connection from database to ensure we have current credentials
       val latestConnection = dao.getConnectionById(connection.id) ?: connection
 
-      // Check if we have an active client
-      val existingClient = activeClients[connection.id]
-
-      // If no client exists, or if connection details have changed, create a new one
-      val client = if (existingClient == null) {
-        // Create new client with latest connection settings
-        NetworkClientFactory.createClient(latestConnection).also { newClient ->
-          newClient.connect().getOrThrow()
-          activeClients[connection.id] = newClient
-        }
-      } else {
-        existingClient
-      }
+      // Reuse the cached client only if it is still actually connected; otherwise
+      // drop it and reconnect (handles idle/server-dropped sessions).
+      val client = obtainConnectedClient(connection.id, latestConnection)
 
       // List files
       client.listFiles(path)
@@ -233,25 +223,33 @@ class NetworkRepository(
       // Always fetch the latest connection from database to ensure we have current credentials
       val latestConnection = dao.getConnectionById(connection.id) ?: connection
 
-      // Check if we have an active client
-      val existingClient = activeClients[connection.id]
-
-      // If no client exists, or if connection details have changed, create a new one
-      val client = if (existingClient == null) {
-        // Create new client with latest connection settings
-        NetworkClientFactory.createClient(latestConnection).also { newClient ->
-          newClient.connect().getOrThrow()
-          activeClients[connection.id] = newClient
-        }
-      } else {
-        existingClient
-      }
+      // Reuse the cached client only if it is still actually connected; otherwise reconnect.
+      val client = obtainConnectedClient(connection.id, latestConnection)
 
       // Delete file
       client.deleteFile(path)
     } catch (e: Exception) {
       Result.failure(e)
     }
+
+  /**
+   * Returns a connected client for [connectionId], reusing the cached one only when it is
+   * still actually connected. A stale/dropped client is disconnected and replaced with a
+   * freshly connected one. Throws if a new connection cannot be established.
+   */
+  private suspend fun obtainConnectedClient(
+    connectionId: Long,
+    connection: NetworkConnection,
+  ): NetworkClient {
+    val existing = activeClients[connectionId]
+    if (existing != null && existing.isConnected()) return existing
+
+    existing?.let { runCatching { it.disconnect() } }
+    val newClient = NetworkClientFactory.createClient(connection)
+    newClient.connect().getOrThrow()
+    activeClients[connectionId] = newClient
+    return newClient
+  }
 
   /**
    * Get an active client for a connection

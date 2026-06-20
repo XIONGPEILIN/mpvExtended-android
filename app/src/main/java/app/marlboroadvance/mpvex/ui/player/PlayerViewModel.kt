@@ -91,6 +91,79 @@ class PlayerViewModel(
   private val json: Json by inject()
   private val playbackStateDao: app.marlboroadvance.mpvex.database.dao.PlaybackStateDao by inject()
   private val wyzieRepository: WyzieSearchRepository by inject()
+  private val networkRepository: app.marlboroadvance.mpvex.repository.NetworkRepository by inject()
+
+  // Network playback context, set by the Activity on each loaded file. Used so the
+  // "add external subtitle" picker can browse the remote share instead of local storage.
+  var networkConnectionId: Long = -1L
+    private set
+  var networkBaseDir: String? = null
+    private set
+
+  fun setNetworkContext(connectionId: Long, currentFileNetworkPath: String?) {
+    networkConnectionId = connectionId
+    networkBaseDir = currentFileNetworkPath
+      ?.substringBeforeLast('/', "")
+      ?.takeIf { it.isNotBlank() }
+  }
+
+  /** Lists files for the active network connection (used by the network subtitle picker). */
+  suspend fun listNetworkFiles(path: String): List<app.marlboroadvance.mpvex.domain.network.NetworkFile> {
+    if (networkConnectionId == -1L) return emptyList()
+    val connection = networkRepository.getConnectionById(networkConnectionId) ?: return emptyList()
+    return networkRepository.listFiles(connection, path).getOrDefault(emptyList())
+  }
+
+  /**
+   * Loads a subtitle file that lives on the active network share. The file is streamed
+   * through the local proxy (mpv cannot open smb:// directly) and selected immediately.
+   */
+  fun addNetworkSubtitle(file: app.marlboroadvance.mpvex.domain.network.NetworkFile) {
+    viewModelScope.launch(Dispatchers.IO) {
+      runCatching {
+        val displayName = file.name
+          .substringAfterLast('/')
+          .substringAfterLast('\\')
+          .takeIf { it.isNotBlank() } ?: file.name
+
+        if (!isValidSubtitleFile(displayName)) {
+          return@launch withContext(Dispatchers.Main) { showToast("Invalid subtitle file format") }
+        }
+
+        val connection = networkRepository.getConnectionById(networkConnectionId)
+          ?: return@launch withContext(Dispatchers.Main) { showToast("Failed to load subtitle") }
+
+        val proxy = app.marlboroadvance.mpvex.ui.browser.networkstreaming.proxy.NetworkStreamingProxy.getInstance()
+        val urlSafeFilename = displayName.replace(" ", ".").replace(Regex("[^a-zA-Z0-9._-]"), "")
+        val streamId = "sub_${urlSafeFilename}_${System.currentTimeMillis()}"
+        val proxyUrl = proxy.registerStream(
+          streamId = streamId,
+          connection = connection,
+          filePath = file.path,
+          fileSize = file.size,
+          mimeType = "text/plain",
+          title = displayName,
+        )
+
+        if (_externalSubtitles.contains(proxyUrl)) return@launch
+
+        val trackCountBefore = MPVLib.getPropertyInt("track-list/count") ?: 0
+        MPVLib.command("sub-add", proxyUrl, "select")
+        val trackCountAfter = MPVLib.getPropertyInt("track-list/count") ?: 0
+        if (trackCountAfter > trackCountBefore) {
+          MPVLib.setPropertyString("track-list/${trackCountAfter - 1}/title", displayName)
+        }
+        _externalSubtitles.add(proxyUrl)
+
+        withContext(Dispatchers.Main) {
+          val shortName = displayName.take(30).let { if (displayName.length > 30) "$it..." else it }
+          showToast("$shortName added")
+        }
+      }.onFailure {
+        withContext(Dispatchers.Main) { showToast("Failed to load subtitle") }
+      }
+    }
+  }
 
   // Playlist items for the playlist sheet
   private val _playlistItems = kotlinx.coroutines.flow.MutableStateFlow<List<app.marlboroadvance.mpvex.ui.player.controls.components.sheets.PlaylistItem>>(emptyList())
@@ -279,12 +352,14 @@ class PlayerViewModel(
   var currentMediaTitle: String = ""
   private var lastAutoSelectedMediaTitle: String? = null
 
-  // External subtitle tracking
-  private val _externalSubtitles = mutableListOf<String>()
+  // External subtitle tracking. Thread-safe: mutated/read from multiple IO coroutines
+  // (addSubtitle, addNetworkSubtitle, scanLocalSubtitles, restore, removeSubtitle).
+  private val _externalSubtitles = java.util.concurrent.CopyOnWriteArrayList<String>()
   val externalSubtitles: List<String> get() = _externalSubtitles.toList()
-  
-  // Mapping from mpv internal path/URI to the original source URI (resolves deletion issues)
-  private val mpvPathToUriMap = mutableMapOf<String, String>()
+
+  // Mapping from mpv internal path/URI to the original source URI (resolves deletion issues).
+  // Thread-safe: accessed from multiple IO coroutines.
+  private val mpvPathToUriMap = java.util.concurrent.ConcurrentHashMap<String, String>()
 
   // Repeat and Shuffle state
   private val _repeatMode = MutableStateFlow(RepeatMode.OFF)

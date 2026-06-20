@@ -496,6 +496,37 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
   }
 }
 
+/**
+ * Migration from version 10 to version 11.
+ *
+ * Adds indices that the entities now declare:
+ * - RecentlyPlayedEntity: UNIQUE(filePath) + index(timestamp) + index(playlistId)
+ * - network_connections: index(autoConnect)
+ *
+ * Before creating the UNIQUE index on filePath, deduplicate any existing rows that share
+ * the same filePath (keeping the newest row, i.e. the highest auto-increment id), otherwise
+ * the unique index creation would fail on legacy data.
+ */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    try {
+      // Deduplicate recently-played rows by filePath, keeping the newest (max id) per path.
+      db.execSQL(
+        "DELETE FROM RecentlyPlayedEntity WHERE id NOT IN " +
+          "(SELECT MAX(id) FROM RecentlyPlayedEntity GROUP BY filePath)",
+      )
+      db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_RecentlyPlayedEntity_filePath` ON `RecentlyPlayedEntity` (`filePath`)")
+      db.execSQL("CREATE INDEX IF NOT EXISTS `index_RecentlyPlayedEntity_timestamp` ON `RecentlyPlayedEntity` (`timestamp`)")
+      db.execSQL("CREATE INDEX IF NOT EXISTS `index_RecentlyPlayedEntity_playlistId` ON `RecentlyPlayedEntity` (`playlistId`)")
+      db.execSQL("CREATE INDEX IF NOT EXISTS `index_network_connections_autoConnect` ON `network_connections` (`autoConnect`)")
+      android.util.Log.d("Migration_10_11", "Migration completed successfully")
+    } catch (e: Exception) {
+      android.util.Log.e("Migration_10_11", "Migration failed", e)
+      throw e
+    }
+  }
+}
+
 
 val DatabaseModule =
   module {
@@ -511,8 +542,10 @@ val DatabaseModule =
       Room
         .databaseBuilder(context, MpvExDatabase::class.java, "mpvex.db")
         .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
-        .fallbackToDestructiveMigration(true) // Fallback if migration fails (last resort)
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
+        // Only wipe on downgrade (rare); never silently destroy data when an *upgrade*
+        // migration is missing/failing — fail loudly so the bug is caught instead.
+        .fallbackToDestructiveMigrationOnDowngrade(true)
         .build()
     }
 

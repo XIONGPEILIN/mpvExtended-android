@@ -8,6 +8,10 @@ import kotlinx.coroutines.flow.Flow
 class RecentlyPlayedRepositoryImpl(
   private val recentlyPlayedDao: RecentlyPlayedDao,
 ) : RecentlyPlayedRepository {
+  private companion object {
+    // Cap the recently-played table so it cannot grow without bound.
+    const val MAX_RECENTLY_PLAYED_ROWS = 500
+  }
   override suspend fun addRecentlyPlayed(
     filePath: String,
     fileName: String,
@@ -58,6 +62,9 @@ class RecentlyPlayedRepositoryImpl(
       )
       recentlyPlayedDao.insert(entity)
     }
+
+    // Bound table growth (only meaningful work when inserting a brand-new path).
+    recentlyPlayedDao.pruneToLimit(MAX_RECENTLY_PLAYED_ROWS)
   }
 
   override suspend fun getLastPlayed(): RecentlyPlayedEntity? = recentlyPlayedDao.getLastPlayed()

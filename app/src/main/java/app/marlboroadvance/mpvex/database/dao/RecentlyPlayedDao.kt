@@ -80,6 +80,13 @@ interface RecentlyPlayedDao {
   @Query("DELETE FROM RecentlyPlayedEntity WHERE timestamp < :cutoffTime")
   suspend fun deleteOlderThan(cutoffTime: Long)
 
+  /** Keeps only the [maxRows] most recently played entries, deleting the rest. */
+  @Query(
+    "DELETE FROM RecentlyPlayedEntity WHERE id NOT IN " +
+      "(SELECT id FROM RecentlyPlayedEntity ORDER BY timestamp DESC LIMIT :maxRows)",
+  )
+  suspend fun pruneToLimit(maxRows: Int)
+
   @Query("DELETE FROM RecentlyPlayedEntity WHERE filePath = :filePath")
   suspend fun deleteByFilePath(filePath: String)
 

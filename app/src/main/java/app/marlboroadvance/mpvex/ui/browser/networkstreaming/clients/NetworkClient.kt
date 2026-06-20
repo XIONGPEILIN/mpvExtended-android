@@ -1,6 +1,5 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients
 
-import android.net.Uri
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import java.io.InputStream
 
@@ -37,11 +36,6 @@ interface NetworkClient {
    * Get file size for a specific file path
    */
   suspend fun getFileSize(path: String): Result<Long>
-
-  /**
-   * Get file URI for playback
-   */
-  suspend fun getFileUri(path: String): Result<Uri>
 
   /**
    * Delete a file on the server

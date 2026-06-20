@@ -1,9 +1,16 @@
 package app.marlboroadvance.mpvex.database.entities
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity
+@Entity(
+  indices = [
+    Index(value = ["filePath"], unique = true),
+    Index(value = ["timestamp"]),
+    Index(value = ["playlistId"]),
+  ],
+)
 data class RecentlyPlayedEntity(
   @PrimaryKey(autoGenerate = true) val id: Int = 0,
   val filePath: String,
