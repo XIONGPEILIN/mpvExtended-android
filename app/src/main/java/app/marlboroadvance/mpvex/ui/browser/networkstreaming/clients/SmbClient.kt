@@ -13,7 +13,10 @@ import com.hierynomus.smbj.connection.Connection
 import com.hierynomus.smbj.session.Session
 import com.hierynomus.smbj.share.DiskShare
 import com.hierynomus.smbj.transport.tcp.async.AsyncDirectTcpTransportFactory
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -27,15 +30,31 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
   companion object {
     @Volatile
     private var sharedSmbClient: SMBClient? = null
-    private val connectMutex = Mutex()
+
+    // Keep SMB operation timeouts short enough that a half-open / idle-dropped
+    // connection (server or router silently killed an idle TCP after the demuxer
+    // stopped reading) surfaces a SocketTimeoutException in ~15s instead of pinning
+    // the request thread for a full minute. The 60s value froze playlist switching.
+    private const val SMB_TIMEOUT_MS = 15000L
+
+    // If a share has sat idle longer than this, proactively reconnect before the next
+    // operation instead of risking a block on a connection the server/router dropped
+    // while the player was reading purely from its demuxer cache. This is what turns
+    // "switch to next episode hangs ~15s then recovers" into a near-instant switch.
+    private const val IDLE_RECONNECT_THRESHOLD_MS = 25000L
+
+    // Detached IO scope used to tear down dead/superseded connections off the caller's
+    // thread: on a half-open socket smbj's graceful LOGOFF/tree-disconnect blocks until
+    // SO_TIMEOUT, which would otherwise re-introduce the very freeze we're removing.
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private fun getOrCreateClient(): SMBClient {
       return sharedSmbClient ?: synchronized(this) {
         sharedSmbClient ?: run {
           val config = SmbConfig.builder()
             .withTransportLayerFactory(AsyncDirectTcpTransportFactory())
-            .withTimeout(60000, TimeUnit.MILLISECONDS)
-            .withSoTimeout(60000, TimeUnit.MILLISECONDS)
+            .withTimeout(SMB_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .withSoTimeout(SMB_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .withReadBufferSize(1024 * 1024)
             .withWriteBufferSize(1024 * 1024)
             .withTransactBufferSize(1024 * 1024)
@@ -56,6 +75,20 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
       }
     }
   }
+
+  // Serializes connect()/reconnect() for THIS client instance only. It used to be a
+  // single companion-wide mutex, so one stalled reconnect (e.g. the streaming proxy
+  // recovering from an idle-dropped session) blocked EVERY other SMB client app-wide,
+  // including the file browser — that is the "exiting to the folder also freezes"
+  // symptom. Per-instance locking lets the browser stay responsive while the proxy
+  // reconnects, and vice versa.
+  private val connectMutex = Mutex()
+
+  // Timestamp (ms) of the last successful share operation, used to detect a connection
+  // that has gone stale during a long idle period. Volatile: read/written from both the
+  // proxy's NanoHTTPD worker threads and the IO dispatcher.
+  @Volatile
+  private var lastSuccessfulIoMs: Long = 0L
 
   private var smbConnection: Connection? = null
   private var session: Session? = null
@@ -101,11 +134,15 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
     }
 
   override suspend fun disconnect() {
-    withContext(Dispatchers.IO) {
-      try { diskShare?.close() } catch (_: Exception) {}
-      try { session?.close() } catch (_: Exception) {}
-      try { smbConnection?.close() } catch (_: Exception) {}
-      diskShare = null; session = null; smbConnection = null
+    // Null the references first, then close the old objects on a detached scope. A graceful
+    // close on a half-open socket sends LOGOFF/tree-disconnect and blocks until SO_TIMEOUT;
+    // doing it inline would freeze the caller (and any reconnect that runs through here).
+    val oldShare = diskShare; val oldSession = session; val oldConnection = smbConnection
+    diskShare = null; session = null; smbConnection = null
+    ioScope.launch {
+      try { oldShare?.close() } catch (_: Exception) {}
+      try { oldSession?.close() } catch (_: Exception) {}
+      try { oldConnection?.close() } catch (_: Exception) {}
     }
   }
 
@@ -123,6 +160,19 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
   }
 
   /**
+   * Lightweight liveness ping driven by the streaming proxy on a fixed interval. A cheap
+   * metadata round-trip keeps the server/router from dropping the idle TCP while the player
+   * reads from its demuxer cache, and — because it runs through [withShare] — transparently
+   * re-establishes a dropped session in the BACKGROUND, so the next real read/seek/switch is
+   * instant instead of blocking until the SMB timeout fires.
+   */
+  override suspend fun keepAlive() {
+    withContext(Dispatchers.IO) {
+      withShare { it.folderExists(basePath) }
+    }
+  }
+
+  /**
    * Runs an operation against the disk share, transparently reconnecting and retrying
    * once if the share/session has been invalidated by the server.
    */
@@ -130,11 +180,20 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
     var lastError: Exception? = null
     for (attempt in 0..1) {
       try {
-        if (!isConnected()) {
-          (if (attempt == 0) connect() else reconnect()).getOrThrow()
+        // If the share has sat idle past the threshold, the connection may have been
+        // silently dropped while playback ran from the demuxer cache. isConnected()
+        // can't detect that (it only reads smbj's local flag), so force a reconnect
+        // instead of blocking on a half-dead socket until the SMB timeout fires.
+        val idleTooLong = lastSuccessfulIoMs != 0L &&
+          System.currentTimeMillis() - lastSuccessfulIoMs > IDLE_RECONNECT_THRESHOLD_MS
+        when {
+          idleTooLong -> reconnect().getOrThrow()
+          !isConnected() -> (if (attempt == 0) connect() else reconnect()).getOrThrow()
         }
         val ds = diskShare ?: throw IllegalStateException("Not connected")
-        return Result.success(block(ds))
+        val result = block(ds)
+        lastSuccessfulIoMs = System.currentTimeMillis()
+        return Result.success(result)
       } catch (e: Exception) {
         lastError = e
         // Drop the stale connection so the next attempt establishes a fresh session.
@@ -217,7 +276,14 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
           }
           override fun read(b: ByteArray, off: Int, len: Int): Int {
             val read = file.read(b, currentPosition, off, len)
-            if (read > 0) currentPosition += read
+            if (read > 0) {
+              currentPosition += read
+              // These proxy reads happen OUTSIDE withShare, so this is the only place that
+              // reflects real streaming I/O. Refresh the idle timer (throttled) so the
+              // idle-reconnect check never tears down a stream that is actively reading.
+              val now = System.currentTimeMillis()
+              if (now - lastSuccessfulIoMs > 1000L) lastSuccessfulIoMs = now
+            }
             return read
           }
           override fun close() { try { file.close() } catch (_: Exception) {} }

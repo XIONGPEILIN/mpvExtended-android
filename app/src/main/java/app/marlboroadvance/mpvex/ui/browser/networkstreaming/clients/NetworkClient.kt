@@ -41,4 +41,11 @@ interface NetworkClient {
    * Delete a file on the server
    */
   suspend fun deleteFile(path: String): Result<Unit>
+
+  /**
+   * Lightweight liveness ping. Implementations that hold a persistent connection (e.g. SMB)
+   * should perform a cheap round-trip to keep the session warm and transparently reconnect
+   * if it has been dropped. Default is a no-op for stateless clients.
+   */
+  suspend fun keepAlive() {}
 }

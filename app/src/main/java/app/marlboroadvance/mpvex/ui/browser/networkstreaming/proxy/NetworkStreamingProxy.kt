@@ -5,6 +5,13 @@ import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClient
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClientFactory
 import fi.iki.elonen.NanoHTTPD
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.InputStream
 import java.util.concurrent.ConcurrentHashMap
@@ -16,6 +23,11 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
 
   companion object {
     private const val TAG = "NetworkStreamingProxy"
+
+    // Ping active network sessions on this cadence so an idle NAS/router never gets the
+    // chance to silently drop the TCP while the player is reading from its demuxer cache.
+    // Must stay comfortably below typical idle-drop windows (~25s+ observed on this NAS).
+    private const val KEEPALIVE_INTERVAL_MS = 15_000L
 
     @Volatile
     private var instance: NetworkStreamingProxy? = null
@@ -44,6 +56,11 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
   private val activeStreams = ConcurrentHashMap<String, StreamInfo>()
   // Global cache of network clients to reuse connections (Connection Pooling)
   private val clientCache = ConcurrentHashMap<Long, NetworkClient>()
+
+  // Background keepalive that holds streaming sessions open for the whole playback session.
+  private val keepAliveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  @Volatile
+  private var keepAliveJob: Job? = null
 
   data class StreamInfo(
     val connection: NetworkConnection,
@@ -80,6 +97,7 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
     )
 
     activeStreams[streamId] = streamInfo
+    ensureKeepAlive()
 
     return "http://127.0.0.1:$listeningPort/$streamId"
   }
@@ -102,7 +120,37 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
     activeStreams.remove(streamId)
   }
 
+  /**
+   * Starts the background keepalive loop if it isn't already running. Each tick pings every
+   * connection that currently backs an active stream so a dropped session is detected and
+   * re-established off the playback path — turning the old "switch/seek freezes for ~15-60s"
+   * into a near-instant operation.
+   */
+  private fun ensureKeepAlive() {
+    if (keepAliveJob?.isActive == true) return
+    synchronized(this) {
+      if (keepAliveJob?.isActive == true) return
+      keepAliveJob = keepAliveScope.launch {
+        while (isActive) {
+          delay(KEEPALIVE_INTERVAL_MS)
+          // Keep warm only the connections that currently back an active stream.
+          val activeConnectionIds = activeStreams.values.mapTo(HashSet()) { it.connection.id }
+          for (id in activeConnectionIds) {
+            val client = clientCache[id] ?: continue
+            try {
+              client.keepAlive()
+            } catch (e: Exception) {
+              Log.w(TAG, "Keepalive failed for connection $id", e)
+            }
+          }
+        }
+      }
+    }
+  }
+
   private fun cleanup() {
+    keepAliveJob?.cancel()
+    keepAliveJob = null
     activeStreams.clear()
     clientCache.values.forEach { client ->
       runBlocking {
