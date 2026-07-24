@@ -463,6 +463,7 @@ class PlayerActivity :
           )
           playableUri?.let { uri ->
             Log.d(TAG, "MPV dispatch[player.playFile] uri=$uri")
+            player.prepareStreamForPlayback(uri, fileName)
             player.playFile(uri)
           }
         } else {
@@ -494,7 +495,10 @@ class PlayerActivity :
       // Set HTTP headers (including referer) BEFORE playing the file
       setHttpHeadersFromExtras(intent.extras)
 
-      getPlayableUri(intent)?.let(player::playFile)
+      getPlayableUri(intent)?.let { uri ->
+        player.prepareStreamForPlayback(uri, fileName)
+        player.playFile(uri)
+      }
     }
 
     // Only set orientation immediately if NOT in Video mode
@@ -2615,7 +2619,7 @@ class PlayerActivity :
             )
             lifecycleScope.launch(Dispatchers.Default) {
               Log.d(TAG, "MPV dispatch[loadfile:onNewIntent:mpvnas] uri=$uri")
-              MPVLib.command("loadfile", uri)
+              player.loadFile(uri, fileName)
             }
           }
         } else {
@@ -2646,7 +2650,7 @@ class PlayerActivity :
         // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
         lifecycleScope.launch(Dispatchers.Default) {
           Log.d(TAG, "MPV dispatch[loadfile:onNewIntent:regular] uri=$uri")
-          MPVLib.command("loadfile", uri)
+          player.loadFile(uri, fileName)
         }
       }
     }
@@ -3360,7 +3364,7 @@ class PlayerActivity :
     // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
     lifecycleScope.launch(Dispatchers.Default) {
       Log.d(TAG, "MPV dispatch[loadfile:playlistItem] uri=$playableUri")
-      MPVLib.command("loadfile", playableUri)
+      player.loadFile(playableUri, fileName)
     }
 
     // Update media title (this will trigger UI update)

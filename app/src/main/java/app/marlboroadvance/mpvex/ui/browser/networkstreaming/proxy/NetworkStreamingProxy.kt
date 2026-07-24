@@ -15,6 +15,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.InputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 
 /**
  * Local HTTP proxy server that enables seeking for network streaming protocols
@@ -28,6 +30,8 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
     // chance to silently drop the TCP while the player is reading from its demuxer cache.
     // Must stay comfortably below typical idle-drop windows (~25s+ observed on this NAS).
     private const val KEEPALIVE_INTERVAL_MS = 15_000L
+    private const val MAX_CONCURRENT_RESPONSES_PER_STREAM = 8
+    private const val RESPONSE_SLOT_WAIT_MS = 3_000L
 
     @Volatile
     private var instance: NetworkStreamingProxy? = null
@@ -69,6 +73,7 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
     var fileSize: Long = -1L,
     var mimeType: String = "video/mp4",
     var title: String? = null,
+    val responseSlots: Semaphore = Semaphore(MAX_CONCURRENT_RESPONSES_PER_STREAM, true),
   )
 
   /**
@@ -186,61 +191,92 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
   }
 
   private fun handleRangeRequest(session: IHTTPSession, streamInfo: StreamInfo, rangeHeader: String): Response {
-    val rangeValue = rangeHeader.removePrefix("bytes=")
-    val parts = rangeValue.split("-")
-    val start = parts[0].toLongOrNull() ?: 0L
-    
-    if (streamInfo.fileSize < 0) {
-      streamInfo.fileSize = runBlocking {
-        if (!streamInfo.client.isConnected()) streamInfo.client.connect()
-        streamInfo.client.getFileSize(streamInfo.filePath).getOrDefault(-1L)
+    if (!streamInfo.responseSlots.tryAcquire(RESPONSE_SLOT_WAIT_MS, TimeUnit.MILLISECONDS)) {
+      return newFixedLengthResponse(
+        Response.Status.SERVICE_UNAVAILABLE,
+        MIME_PLAINTEXT,
+        "Too many concurrent range requests",
+      ).apply { addHeader("Retry-After", "1") }
+    }
+    var responseOwnsSlot = false
+    try {
+      val rangeValue = rangeHeader.removePrefix("bytes=")
+      val parts = rangeValue.split("-")
+      val start = parts[0].toLongOrNull() ?: 0L
+
+      if (streamInfo.fileSize < 0) {
+        streamInfo.fileSize = runBlocking {
+          if (!streamInfo.client.isConnected()) streamInfo.client.connect()
+          streamInfo.client.getFileSize(streamInfo.filePath).getOrDefault(-1L)
+        }
       }
+
+      val fileSize = streamInfo.fileSize
+      val end = if (parts.size > 1 && parts[1].isNotEmpty()) parts[1].toLongOrNull() else null
+      val rangeEnd = end ?: (fileSize - 1)
+      val contentLength = if (fileSize > 0) rangeEnd - start + 1 else -1L
+
+      val inputStream = runBlocking {
+        if (!streamInfo.client.isConnected()) streamInfo.client.connect()
+        streamInfo.client.getFileStream(streamInfo.filePath, start).getOrNull()
+      } ?: return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Failed to open stream")
+
+      val response =
+        CloseOnDisconnectResponse(
+          Response.Status.PARTIAL_CONTENT,
+          streamInfo.mimeType,
+          inputStream,
+          contentLength,
+          onClosed = { streamInfo.responseSlots.release() },
+        )
+      responseOwnsSlot = true
+
+      response.addHeader("Accept-Ranges", "bytes")
+      if (fileSize > 0) {
+        response.addHeader("Content-Range", "bytes $start-$rangeEnd/$fileSize")
+      }
+      return response
+    } finally {
+      if (!responseOwnsSlot) streamInfo.responseSlots.release()
     }
-
-    val fileSize = streamInfo.fileSize
-    val end = if (parts.size > 1 && parts[1].isNotEmpty()) parts[1].toLongOrNull() else null
-    val rangeEnd = end ?: (fileSize - 1)
-    val contentLength = if (fileSize > 0) rangeEnd - start + 1 else -1L
-
-    val inputStream = runBlocking {
-      if (!streamInfo.client.isConnected()) streamInfo.client.connect()
-      streamInfo.client.getFileStream(streamInfo.filePath, start).getOrNull()
-    } ?: return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Failed to open stream")
-
-    val response = if (contentLength > 0) {
-        newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, streamInfo.mimeType, inputStream, contentLength)
-    } else {
-        // Fallback for unknown size
-        newChunkedResponse(Response.Status.PARTIAL_CONTENT, streamInfo.mimeType, inputStream)
-    }
-
-    response.addHeader("Accept-Ranges", "bytes")
-    if (fileSize > 0) {
-      response.addHeader("Content-Range", "bytes $start-$rangeEnd/$fileSize")
-    }
-    return response
   }
 
   private fun handleFullRequest(session: IHTTPSession, streamInfo: StreamInfo): Response {
-    if (streamInfo.fileSize < 0) {
-      streamInfo.fileSize = runBlocking {
-        if (!streamInfo.client.isConnected()) streamInfo.client.connect()
-        streamInfo.client.getFileSize(streamInfo.filePath).getOrDefault(-1L)
+    if (!streamInfo.responseSlots.tryAcquire(RESPONSE_SLOT_WAIT_MS, TimeUnit.MILLISECONDS)) {
+      return newFixedLengthResponse(
+        Response.Status.SERVICE_UNAVAILABLE,
+        MIME_PLAINTEXT,
+        "Too many concurrent requests",
+      ).apply { addHeader("Retry-After", "1") }
+    }
+    var responseOwnsSlot = false
+    try {
+      if (streamInfo.fileSize < 0) {
+        streamInfo.fileSize = runBlocking {
+          if (!streamInfo.client.isConnected()) streamInfo.client.connect()
+          streamInfo.client.getFileSize(streamInfo.filePath).getOrDefault(-1L)
+        }
       }
+
+      val inputStream = runBlocking {
+        if (!streamInfo.client.isConnected()) streamInfo.client.connect()
+        streamInfo.client.getFileStream(streamInfo.filePath, 0).getOrNull()
+      } ?: return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Failed to open stream")
+
+      val response =
+        CloseOnDisconnectResponse(
+          Response.Status.OK,
+          streamInfo.mimeType,
+          inputStream,
+          streamInfo.fileSize,
+          onClosed = { streamInfo.responseSlots.release() },
+        )
+      responseOwnsSlot = true
+
+      response.addHeader("Accept-Ranges", "bytes")
+      return response
+    } finally {
+      if (!responseOwnsSlot) streamInfo.responseSlots.release()
     }
-
-    val inputStream = runBlocking {
-      if (!streamInfo.client.isConnected()) streamInfo.client.connect()
-      streamInfo.client.getFileStream(streamInfo.filePath, 0).getOrNull()
-    } ?: return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Failed to open stream")
-
-    val response = if (streamInfo.fileSize > 0) {
-        newFixedLengthResponse(Response.Status.OK, streamInfo.mimeType, inputStream, streamInfo.fileSize)
-    } else {
-        newChunkedResponse(Response.Status.OK, streamInfo.mimeType, inputStream)
-    }
-
-    response.addHeader("Accept-Ranges", "bytes")
-    return response
   }
 }

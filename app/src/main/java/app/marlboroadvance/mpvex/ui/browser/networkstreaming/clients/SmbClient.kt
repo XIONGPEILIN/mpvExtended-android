@@ -25,6 +25,8 @@ import java.io.BufferedInputStream
 import java.io.InputStream
 import java.util.EnumSet
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class SmbClient(private val connection: NetworkConnection) : NetworkClient {
   companion object {
@@ -83,6 +85,15 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
   // symptom. Per-instance locking lets the browser stay responsive while the proxy
   // reconnects, and vice versa.
   private val connectMutex = Mutex()
+
+  // Serializes only connection-health decisions. File reads remain concurrent, but a burst
+  // of HTTP Range requests can no longer all observe the same idle session and repeatedly
+  // disconnect one another's freshly-created DiskShare.
+  private val shareStateMutex = Mutex()
+
+  // An opened SMB file may not have performed its first read yet. Treat it as active so the
+  // idle-session heuristic cannot tear its share down in that small but important window.
+  private val activeFileStreams = AtomicInteger()
 
   // Timestamp (ms) of the last successful share operation, used to detect a connection
   // that has gone stale during a long idle period. Volatile: read/written from both the
@@ -179,28 +190,50 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
   private suspend fun <T> withShare(block: (DiskShare) -> T): Result<T> {
     var lastError: Exception? = null
     for (attempt in 0..1) {
+      var usedShare: DiskShare? = null
       try {
-        // If the share has sat idle past the threshold, the connection may have been
-        // silently dropped while playback ran from the demuxer cache. isConnected()
-        // can't detect that (it only reads smbj's local flag), so force a reconnect
-        // instead of blocking on a half-dead socket until the SMB timeout fires.
-        val idleTooLong = lastSuccessfulIoMs != 0L &&
-          System.currentTimeMillis() - lastSuccessfulIoMs > IDLE_RECONNECT_THRESHOLD_MS
-        when {
-          idleTooLong -> reconnect().getOrThrow()
-          !isConnected() -> (if (attempt == 0) connect() else reconnect()).getOrThrow()
+        val ds = shareStateMutex.withLock {
+          // Re-evaluate while holding the state lock. Previously every concurrent Range
+          // request could see idleTooLong=true and close the session created by its peer.
+          val idleTooLong =
+            activeFileStreams.get() == 0 &&
+              lastSuccessfulIoMs != 0L &&
+              System.currentTimeMillis() - lastSuccessfulIoMs > IDLE_RECONNECT_THRESHOLD_MS
+          when {
+            idleTooLong -> reconnect().getOrThrow()
+            !isConnected() -> (if (attempt == 0) connect() else reconnect()).getOrThrow()
+          }
+          diskShare ?: throw IllegalStateException("Not connected")
         }
-        val ds = diskShare ?: throw IllegalStateException("Not connected")
+        usedShare = ds
         val result = block(ds)
         lastSuccessfulIoMs = System.currentTimeMillis()
         return Result.success(result)
       } catch (e: Exception) {
         lastError = e
-        // Drop the stale connection so the next attempt establishes a fresh session.
-        disconnect()
+        val failedShare = usedShare
+        if (attempt == 1 || failedShare == null || !isConnectionFailure(e, failedShare)) {
+          break
+        }
+        // Invalidate only the generation that actually failed. If another request already
+        // reconnected, never close that newer session.
+        shareStateMutex.withLock {
+          if (diskShare === failedShare) disconnect()
+        }
       }
     }
     return Result.failure(lastError ?: Exception("Not connected"))
+  }
+
+  private fun isConnectionFailure(error: Exception, share: DiskShare): Boolean {
+    if (!share.isConnected) return true
+    if (error is java.io.IOException) return true
+    val message = error.message?.lowercase().orEmpty()
+    return message.contains("closed") ||
+      message.contains("connection reset") ||
+      message.contains("transport") ||
+      message.contains("timed out") ||
+      message.contains("timeout")
   }
 
   private fun getRelativePath(path: String): String {
@@ -266,10 +299,13 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
     withContext(Dispatchers.IO) {
       withShare { ds ->
         val file = ds.openFile(resolveSharePath(path), EnumSet.of(AccessMask.GENERIC_READ), null, EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ), SMB2CreateDisposition.FILE_OPEN, null)
+        activeFileStreams.incrementAndGet()
 
         // Optimized Seekable Raw Stream
         val rawSeekable = object : InputStream() {
           private var currentPosition = offset
+          private val closed = AtomicBoolean()
+
           override fun read(): Int {
             val b = ByteArray(1)
             return if (read(b, 0, 1) == 1) b[0].toInt() and 0xFF else -1
@@ -286,7 +322,16 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
             }
             return read
           }
-          override fun close() { try { file.close() } catch (_: Exception) {} }
+          override fun close() {
+            if (closed.compareAndSet(false, true)) {
+              try {
+                file.close()
+              } catch (_: Exception) {
+              } finally {
+                activeFileStreams.decrementAndGet()
+              }
+            }
+          }
         }
         
         // Wrap with 1MB buffer for high-speed sequential access (Restore the dozens of MB/s speed)

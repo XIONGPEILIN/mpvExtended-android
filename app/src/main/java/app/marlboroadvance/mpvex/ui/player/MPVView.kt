@@ -35,6 +35,29 @@ class MPVView(
 
   var isExiting = false
 
+  /**
+   * Applies protocol behavior per file so direct Internet streams retain their existing
+   * settings. Must run before loadfile is dispatched.
+   */
+  fun prepareStreamForPlayback(
+    uri: String,
+    mediaName: String? = null,
+  ) {
+    MPVLib.setPropertyString("stream-lavf-o", LocalProxyStreamOptions.forUri(uri))
+    MPVLib.setPropertyString(
+      "demuxer-lavf-o",
+      LocalProxyStreamOptions.demuxerOptionsFor(uri, mediaName),
+    )
+  }
+
+  fun loadFile(
+    uri: String,
+    mediaName: String? = null,
+  ) {
+    prepareStreamForPlayback(uri, mediaName)
+    MPVLib.command("loadfile", uri)
+  }
+
   fun getVideoOutAspect(): Double? {
     // Try to get aspect from video-params/aspect first
     val rawAspect = MPVLib.getPropertyDouble("video-params/aspect")
