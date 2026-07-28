@@ -120,6 +120,10 @@ class MPVView(
   override fun initOptions() {
     val profile = decoderPreferences.profile.get()
     MPVLib.setOptionString("profile", profile)
+    // Keep the mpv core alive when playback is explicitly stopped. PlayerActivity
+    // temporarily stops network playback to release the remote file handle before
+    // deletion, then loads the next playlist item into the same core.
+    MPVLib.setOptionString("idle", "yes")
     val useVulkan = decoderPreferences.useVulkan.get()
     val useGpuNext = useVulkan || decoderPreferences.gpuNext.get()
     setVo(if (useGpuNext) "gpu-next" else "gpu")

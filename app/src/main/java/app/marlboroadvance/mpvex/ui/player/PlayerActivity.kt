@@ -1627,6 +1627,9 @@ class PlayerActivity :
       val playbackPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
       val wasPaused = MPVLib.getPropertyBoolean("pause") ?: false
       beginDeletionPlaybackTransition()
+      // `stop` terminates the mpv core when idle=no. Keep it alive so the
+      // replacement playlist item can be loaded after the remote file is deleted.
+      MPVLib.setPropertyBoolean("idle", true)
       MPVLib.command("stop")
 
       // Give mpv and the localhost proxy time to close the remote read handle.
