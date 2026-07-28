@@ -273,6 +273,10 @@ class PlayerActivity :
   private var audioFocusActive = false // Whether we currently hold audio focus
   private var wasPlayingBeforePause = false // Track if video was playing before pause
   private var isDeletingCurrentVideo = false
+  private var deletionTransitionSequence = 0L
+
+  @Volatile
+  private var playbackLoadGeneration = 0L
 
   /**
    * Custom CoroutineScope for operations that must survive Activity lifecycle cancellation (e.g. saving state).
@@ -1570,6 +1574,7 @@ class PlayerActivity :
         resolution = "",
       )
 
+    beginDeletionPlaybackTransition()
     lifecycleScope.launch {
       val (deleted, _) = PermissionUtils.StorageOps.deleteVideos(this@PlayerActivity, listOf(video))
       if (deleted > 0) {
@@ -1580,6 +1585,7 @@ class PlayerActivity :
         ).show()
         handleCurrentVideoDeleted(uri)
       } else {
+        endDeletionPlaybackTransition()
         Toast.makeText(
           this@PlayerActivity,
           R.string.player_delete_current_video_failed,
@@ -1620,7 +1626,7 @@ class PlayerActivity :
 
       val playbackPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
       val wasPaused = MPVLib.getPropertyBoolean("pause") ?: false
-      isDeletingCurrentVideo = true
+      beginDeletionPlaybackTransition()
       MPVLib.command("stop")
 
       // Give mpv and the localhost proxy time to close the remote read handle.
@@ -1669,12 +1675,29 @@ class PlayerActivity :
           Toast.LENGTH_SHORT,
         ).show()
       }
-
-      // Keep EOF suppression active briefly so the stop event cannot race the
-      // newly loaded playlist item or restored stream.
-      delay(250)
-      isDeletingCurrentVideo = false
     }
+  }
+
+  /**
+   * Suppresses the EOF generated while deletion stops the current file. The
+   * transition ends when mpv confirms that the replacement file has loaded,
+   * instead of relying on a short fixed delay that can expire on slow network
+   * streams.
+   */
+  private fun beginDeletionPlaybackTransition() {
+    isDeletingCurrentVideo = true
+    val sequence = ++deletionTransitionSequence
+    lifecycleScope.launch {
+      delay(10_000)
+      if (deletionTransitionSequence == sequence) {
+        isDeletingCurrentVideo = false
+      }
+    }
+  }
+
+  private fun endDeletionPlaybackTransition() {
+    deletionTransitionSequence++
+    isDeletingCurrentVideo = false
   }
 
   private fun unregisterCurrentProxyStream(uri: Uri) {
@@ -1707,6 +1730,7 @@ class PlayerActivity :
     fileName = ""
 
     if (playlist.isEmpty()) {
+      endDeletionPlaybackTransition()
       finishAndRemoveTask()
       return
     }
@@ -2020,6 +2044,9 @@ class PlayerActivity :
   internal fun event(eventId: Int) {
     when (eventId) {
       MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
+        if (isDeletingCurrentVideo) {
+          endDeletionPlaybackTransition()
+        }
         handleFileLoaded()
         isReady = true
       }
@@ -2062,14 +2089,25 @@ class PlayerActivity :
     setIntentExtras(intent.extras)
     logActiveRenderer()
 
+    val loadedMediaIdentifier = mediaIdentifier
+    val loadedLegacyIdentifier = legacyPlaybackIdentifier()
+    val loadedTrackScopeKey = currentTrackScopeKey()
+    val loadGeneration = ++playbackLoadGeneration
+
     lifecycleScope.launch(Dispatchers.IO) {
       // Load playback state (will skip track restoration if preferred language configured)
-      val hasState = loadVideoPlaybackState(fileName)
+      val hasState =
+        loadVideoPlaybackState(
+          identifier = loadedMediaIdentifier,
+          legacyIdentifier = loadedLegacyIdentifier,
+          loadGeneration = loadGeneration,
+        )
+      if (!isCurrentPlaybackLoad(loadGeneration, loadedMediaIdentifier)) return@launch
 
       // Apply track selection logic (defaults only apply when no saved state).
       // Pass the directory/playlist scope so a carried-over subtitle/audio choice only
       // follows within the same folder/playlist (and not into an unrelated file).
-      trackSelector.onFileLoaded(hasState, currentTrackScopeKey())
+      trackSelector.onFileLoaded(hasState, loadedTrackScopeKey)
 
       // Apply default zoom only if there's no saved state
       if (!hasState) {
@@ -2099,6 +2137,7 @@ class PlayerActivity :
       // became available after the async autoload completed.
       if (subtitlesPreferences.autoloadMatchingSubtitles.get()) {
         autoloadMatchingSubtitlesForCurrent()
+        if (!isCurrentPlaybackLoad(loadGeneration, loadedMediaIdentifier)) return@launch
         trackSelector.reselectSubtitlesNow(hasState)
       }
     }
@@ -2394,7 +2433,9 @@ class PlayerActivity :
    *
    * Uses lifecycleScope to save state; cancels previous pending saves.
    *
-   * @param mediaTitle The title of the media being played
+   * @param identifier Stable identifier of the file whose state should be restored
+   * @param legacyIdentifier Previous-format identifier to migrate, when available
+   * @param loadGeneration Generation of the matching mpv file-loaded event
    */
   /**
    * Saves the current playback state to the database.
@@ -2529,23 +2570,31 @@ class PlayerActivity :
    * @param mediaTitle The title of the media being played
    * @return true if saved state was found and applied, false otherwise
    */
-  private suspend fun loadVideoPlaybackState(mediaTitle: String): Boolean {
-    if (mediaIdentifier.isBlank()) return false
+  private suspend fun loadVideoPlaybackState(
+    identifier: String,
+    legacyIdentifier: String?,
+    loadGeneration: Long,
+  ): Boolean {
+    if (identifier.isBlank()) return false
 
     return runCatching {
-      var state = playbackStateRepository.getVideoDataByTitle(mediaIdentifier)
+      var state = playbackStateRepository.getVideoDataByTitle(identifier)
       if (state == null) {
-        val legacyKey = legacyPlaybackIdentifier()
+        val legacyKey = legacyIdentifier
         if (legacyKey != null) {
           val legacyState = playbackStateRepository.getVideoDataByTitle(legacyKey)
           if (legacyState != null) {
-            state = legacyState.copy(mediaTitle = mediaIdentifier)
+            state = legacyState.copy(mediaTitle = identifier)
             playbackStateRepository.upsert(state!!)
             playbackStateRepository.deleteByTitle(legacyKey)
-            Log.d(TAG, "Migrated legacy playback state key: $legacyKey -> $mediaIdentifier")
+            Log.d(TAG, "Migrated legacy playback state key: $legacyKey -> $identifier")
           }
         }
       }
+
+      // A playlist switch may complete while the database query is suspended.
+      // Never seek or apply the previous file's state to the newly loaded file.
+      if (!isCurrentPlaybackLoad(loadGeneration, identifier)) return@runCatching false
 
       applyPlaybackState(state)
       hydrateDirectoryTrackProfile(state)
@@ -2556,6 +2605,11 @@ class PlayerActivity :
       Log.e(TAG, "Error loading playback state", e)
     }.getOrDefault(false)
   }
+
+  private fun isCurrentPlaybackLoad(
+    loadGeneration: Long,
+    identifier: String,
+  ): Boolean = playbackLoadGeneration == loadGeneration && mediaIdentifier == identifier
 
   /**
    * Applies saved playback state to MPV.
