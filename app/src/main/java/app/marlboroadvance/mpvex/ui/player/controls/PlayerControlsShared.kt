@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.BlurOn
@@ -56,20 +57,25 @@ import androidx.compose.material.icons.outlined.BlurOn
 import androidx.compose.material.icons.outlined.Autorenew
 import androidx.compose.ui.draw.rotate
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -77,6 +83,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.preferences.PlayerButton
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.ui.player.Panels
 import app.marlboroadvance.mpvex.ui.player.PlayerActivity
 import app.marlboroadvance.mpvex.ui.player.PlayerViewModel
@@ -454,6 +461,56 @@ fun RenderPlayerButton(
             modifier = Modifier.size(buttonSize),
           )
         }
+      }
+    }
+
+    PlayerButton.DELETE_CURRENT_VIDEO -> {
+      var showDeleteConfirmation by remember { mutableStateOf(false) }
+
+      ControlsButton(
+        icon = Icons.Default.DeleteForever,
+        onClick = { showDeleteConfirmation = true },
+        title = stringResource(R.string.player_delete_current_video),
+        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.error,
+        modifier = Modifier.size(buttonSize),
+      )
+
+      if (showDeleteConfirmation) {
+        val currentName =
+          activity.currentVideoDisplayName()
+            .ifBlank { mediaTitle.orEmpty() }
+            .ifBlank { stringResource(R.string.player_delete_current_video) }
+
+        AlertDialog(
+          onDismissRequest = { showDeleteConfirmation = false },
+          title = { Text(stringResource(R.string.player_delete_current_video_title)) },
+          text = {
+            Text(
+              stringResource(
+                R.string.player_delete_current_video_message,
+                currentName,
+              ),
+            )
+          },
+          confirmButton = {
+            TextButton(
+              onClick = {
+                showDeleteConfirmation = false
+                activity.deleteCurrentVideo()
+              },
+            ) {
+              Text(
+                text = stringResource(R.string.delete),
+                color = MaterialTheme.colorScheme.error,
+              )
+            }
+          },
+          dismissButton = {
+            TextButton(onClick = { showDeleteConfirmation = false }) {
+              Text(stringResource(android.R.string.cancel))
+            }
+          },
+        )
       }
     }
 

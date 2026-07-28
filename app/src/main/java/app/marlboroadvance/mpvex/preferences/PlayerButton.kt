@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Headset
+import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -42,6 +43,7 @@ enum class PlayerButton(
   DECODER(Icons.Outlined.Memory),
   SCREEN_ROTATION(Icons.Outlined.ScreenRotation),
   FRAME_NAVIGATION(Icons.Outlined.Camera),
+  DELETE_CURRENT_VIDEO(Icons.Outlined.DeleteForever),
   VIDEO_ZOOM(Icons.Outlined.ZoomIn),
   PICTURE_IN_PICTURE(Icons.Outlined.PictureInPictureAlt),
   ASPECT_RATIO(Icons.Outlined.AspectRatio),
@@ -85,6 +87,7 @@ fun getPlayerButtonLabel(button: PlayerButton): String =
     PlayerButton.DECODER -> "Decoder" // stringResource(R.string.btn_label_decoder)
     PlayerButton.SCREEN_ROTATION -> "Screen Rotation" // stringResource(R.string.btn_label_rotation)
     PlayerButton.FRAME_NAVIGATION -> "Frame Navigation" // stringResource(R.string.btn_label_frame_nav)
+    PlayerButton.DELETE_CURRENT_VIDEO -> "Delete Current Video"
     PlayerButton.VIDEO_ZOOM -> "Video Zoom" // stringResource(R.string.btn_label_zoom)
     PlayerButton.PICTURE_IN_PICTURE -> "Picture-in-Picture" // stringResource(R.string.btn_label_pip)
     PlayerButton.ASPECT_RATIO -> "Aspect Ratio" // stringResource(R.string.btn_label_aspect)

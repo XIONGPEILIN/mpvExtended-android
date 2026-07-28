@@ -389,6 +389,11 @@
   <string name="rename">重命名</string>
   <string name="info">详情</string>
   <string name="delete">删除</string>
+  <string name="player_delete_current_video">删除当前视频</string>
+  <string name="player_delete_current_video_title">删除当前视频？</string>
+  <string name="player_delete_current_video_message">“%1$s”将从设备中永久删除，此操作无法撤销。</string>
+  <string name="player_delete_current_video_success">视频已删除</string>
+  <string name="player_delete_current_video_failed">无法删除此视频</string>
   <string name="got_it">知道了</string>
   <string name="general">常规</string>
   <string name="not_set_video_default">未设置 (将使用视频默认值)</string>

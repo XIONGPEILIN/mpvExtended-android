@@ -24,8 +24,10 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
@@ -36,11 +38,13 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.database.entities.NetworkTrackProfileEntity
 import app.marlboroadvance.mpvex.database.entities.PlaybackStateEntity
 import app.marlboroadvance.mpvex.database.repository.NetworkTrackProfileRepository
 import app.marlboroadvance.mpvex.databinding.PlayerLayoutBinding
 import app.marlboroadvance.mpvex.domain.playbackstate.repository.PlaybackStateRepository
+import app.marlboroadvance.mpvex.domain.media.model.Video
 import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
@@ -51,8 +55,11 @@ import app.marlboroadvance.mpvex.ui.player.controls.PlayerControls
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import app.marlboroadvance.mpvex.utils.history.RecentlyPlayedOps
 import app.marlboroadvance.mpvex.utils.media.HttpUtils
+import app.marlboroadvance.mpvex.utils.media.MediaLibraryEvents
 import app.marlboroadvance.mpvex.utils.media.NetworkMediaIdUtils
+import app.marlboroadvance.mpvex.utils.media.PlaybackStateOps
 import app.marlboroadvance.mpvex.utils.media.SubtitleOps
+import app.marlboroadvance.mpvex.utils.permission.PermissionUtils
 import app.marlboroadvance.mpvex.utils.storage.FileTypeUtils
 import app.marlboroadvance.mpvex.utils.storage.FileFilterUtils
 import com.github.k1rakishou.fsaf.FileManager
@@ -61,6 +68,7 @@ import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -264,6 +272,7 @@ class PlayerActivity :
   private var savePlaybackStateJobIdentifier: String? = null // Media identifier the ongoing save belongs to
   private var audioFocusActive = false // Whether we currently hold audio focus
   private var wasPlayingBeforePause = false // Track if video was playing before pause
+  private var isDeletingCurrentVideo = false
 
   /**
    * Custom CoroutineScope for operations that must survive Activity lifecycle cancellation (e.g. saving state).
@@ -305,6 +314,11 @@ class PlayerActivity :
    * Audio focus request for API 26+.
    */
   private var audioFocusRequest: AudioFocusRequest? = null
+
+  private val mediaDeleteLauncher =
+    registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+      PermissionUtils.handleMediaAccessResult(result.resultCode)
+    }
 
   /**
    * Callback to restore audio focus after it's been lost and regained.
@@ -372,6 +386,7 @@ class PlayerActivity :
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    PermissionUtils.setMediaAccessLauncher(mediaDeleteLauncher)
     setContentView(binding.root)
 
     // OPTIMIZATION: Set volume control stream so hardware buttons control media volume
@@ -1468,6 +1483,240 @@ class PlayerActivity :
     }
   }
 
+  private fun currentPlaybackUri(): Uri? =
+    playlist.getOrNull(playlistIndex) ?: extractUriFromIntent(intent)
+
+  internal fun currentVideoDisplayName(): String =
+    currentPlaybackUri()?.let { uri ->
+      playlistTitles[uri]
+        ?: intent.getStringExtra("title")
+        ?: intent.getStringExtra("filename")
+        ?: getPlaylistItemTitle(uri)
+    }.orEmpty()
+
+  /**
+   * Permanently deletes the current local video using the same storage-aware
+  * implementation as the file browser. Scoped-storage builds show Android's
+  * system confirmation when required.
+  */
+  internal fun deleteCurrentVideo() {
+    if (isDeletingCurrentVideo) return
+
+    val uri = currentPlaybackUri()
+    if (uri == null) {
+      Toast.makeText(this, R.string.player_delete_current_video_failed, Toast.LENGTH_SHORT).show()
+      return
+    }
+
+    val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+    val networkFilePath =
+      playlistNetworkFilePaths[uri]
+        ?: intent.getStringExtra("network_file_path")
+
+    if (networkConnectionId >= 0L && !networkFilePath.isNullOrBlank()) {
+      deleteCurrentNetworkVideo(
+        uri = uri,
+        connectionId = networkConnectionId,
+        networkFilePath = networkFilePath,
+      )
+      return
+    }
+
+    if (uri.scheme != "file" && uri.scheme != "content") {
+      Toast.makeText(this, R.string.player_delete_current_video_failed, Toast.LENGTH_SHORT).show()
+      return
+    }
+
+    val displayName = getPlaylistItemTitle(uri)
+    val path =
+      when (uri.scheme) {
+        "file" -> uri.path ?: uri.toString()
+        "content" ->
+          runCatching {
+            contentResolver
+              .query(
+                uri,
+                arrayOf(MediaStore.MediaColumns.DATA),
+                null,
+                null,
+                null,
+              )?.use { cursor ->
+                val dataIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+                if (dataIndex >= 0 && cursor.moveToFirst()) cursor.getString(dataIndex) else null
+              }
+          }.getOrNull() ?: uri.toString()
+        else -> uri.toString()
+      }
+
+    val video =
+      Video(
+        id = 0L,
+        title = displayName.substringBeforeLast('.', displayName),
+        displayName = displayName,
+        path = path,
+        uri = uri,
+        duration = 0L,
+        durationFormatted = "",
+        size = 0L,
+        sizeFormatted = "",
+        dateModified = 0L,
+        dateAdded = 0L,
+        mimeType = "",
+        bucketId = "",
+        bucketDisplayName = "",
+        width = 0,
+        height = 0,
+        fps = 0f,
+        resolution = "",
+      )
+
+    lifecycleScope.launch {
+      val (deleted, _) = PermissionUtils.StorageOps.deleteVideos(this@PlayerActivity, listOf(video))
+      if (deleted > 0) {
+        Toast.makeText(
+          this@PlayerActivity,
+          R.string.player_delete_current_video_success,
+          Toast.LENGTH_SHORT,
+        ).show()
+        handleCurrentVideoDeleted(uri)
+      } else {
+        Toast.makeText(
+          this@PlayerActivity,
+          R.string.player_delete_current_video_failed,
+          Toast.LENGTH_SHORT,
+        ).show()
+      }
+    }
+  }
+
+  /**
+   * Deletes the original file behind an SMB/FTP/WebDAV playback URL.
+   *
+   * Network playback is often exposed to mpv through a localhost HTTP proxy.
+   * The proxy keeps a remote read handle open, so playback must be stopped
+   * briefly before the server will allow deletion.
+   */
+  private fun deleteCurrentNetworkVideo(
+    uri: Uri,
+    connectionId: Long,
+    networkFilePath: String,
+  ) {
+    val displayName = currentVideoDisplayName()
+
+    lifecycleScope.launch {
+      val connection =
+        withContext(Dispatchers.IO) {
+          networkRepository.getConnectionById(connectionId)
+        }
+
+      if (connection == null) {
+        Toast.makeText(
+          this@PlayerActivity,
+          R.string.player_delete_current_video_failed,
+          Toast.LENGTH_SHORT,
+        ).show()
+        return@launch
+      }
+
+      val playbackPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+      val wasPaused = MPVLib.getPropertyBoolean("pause") ?: false
+      isDeletingCurrentVideo = true
+      MPVLib.command("stop")
+
+      // Give mpv and the localhost proxy time to close the remote read handle.
+      delay(350)
+
+      val deleteResult =
+        withContext(Dispatchers.IO) {
+          var result: Result<Unit> =
+            Result.failure(IllegalStateException("Network delete was not attempted"))
+
+          repeat(3) { attempt ->
+            result = networkRepository.deleteFile(connection, networkFilePath)
+            if (result.isSuccess) return@withContext result
+            if (attempt < 2) delay(300)
+          }
+          result
+        }
+
+      if (deleteResult.isSuccess) {
+        unregisterCurrentProxyStream(uri)
+        RecentlyPlayedOps.onVideoDeleted(networkFilePath)
+        PlaybackStateOps.onVideoDeleted(networkFilePath)
+        MediaLibraryEvents.notifyChanged()
+        Toast.makeText(
+          this@PlayerActivity,
+          R.string.player_delete_current_video_success,
+          Toast.LENGTH_SHORT,
+        ).show()
+        handleCurrentVideoDeleted(uri)
+      } else {
+        Log.e(
+          TAG,
+          "Failed to delete current network video: connectionId=$connectionId path=$networkFilePath",
+          deleteResult.exceptionOrNull(),
+        )
+        // Retain the proxy registration so playback can be restored after failure.
+        player.loadFile(uri.toString(), displayName)
+        delay(200)
+        if (playbackPosition > 0.0) {
+          MPVLib.command("seek", playbackPosition.toString(), "absolute", "exact")
+        }
+        MPVLib.setPropertyBoolean("pause", wasPaused)
+        Toast.makeText(
+          this@PlayerActivity,
+          R.string.player_delete_current_video_failed,
+          Toast.LENGTH_SHORT,
+        ).show()
+      }
+
+      // Keep EOF suppression active briefly so the stop event cannot race the
+      // newly loaded playlist item or restored stream.
+      delay(250)
+      isDeletingCurrentVideo = false
+    }
+  }
+
+  private fun unregisterCurrentProxyStream(uri: Uri) {
+    if (uri.host != "127.0.0.1" && uri.host != "localhost") return
+    val streamId = uri.pathSegments.firstOrNull() ?: return
+    app.marlboroadvance.mpvex.ui.browser.networkstreaming.proxy.NetworkStreamingProxy
+      .getInstance()
+      .unregisterStream(streamId)
+    registeredStreamIds.remove(streamId)
+  }
+
+  /**
+   * Moves playback to a remaining playlist item, or closes the player when the
+   * deleted file was the only item.
+   */
+  private fun handleCurrentVideoDeleted(deletedUri: Uri) {
+    val deletedIndex =
+      playlistIndex.takeIf { playlist.getOrNull(it) == deletedUri }
+        ?: playlist.indexOf(deletedUri)
+
+    if (deletedIndex >= 0) {
+      playlist = playlist.toMutableList().also { it.removeAt(deletedIndex) }
+      if (playlistTotalCount > 0) playlistTotalCount--
+    }
+    playlistNetworkFilePaths.remove(deletedUri)
+    playlistTitles.remove(deletedUri)
+
+    // Prevent loadPlaylistItemInternal() from saving fresh playback state for
+    // the file that was just deleted.
+    fileName = ""
+
+    if (playlist.isEmpty()) {
+      finishAndRemoveTask()
+      return
+    }
+
+    playlistIndex = deletedIndex.coerceAtLeast(0).coerceAtMost(playlist.lastIndex)
+    if (viewModel.shuffleEnabled.value) generateShuffledIndices()
+    loadPlaylistItem(playlistIndex)
+    viewModel.refreshPlaylistItems()
+  }
+
   /**
    * Extracts the URI from the intent based on intent type.
    *
@@ -1632,6 +1881,10 @@ class PlayerActivity :
    */
   private fun handleEndOfFile(isEof: Boolean) {
     if (isEof) {
+      // Network deletion intentionally stops playback to release the remote
+      // read handle. Do not treat that stop as normal end-of-file behavior.
+      if (isDeletingCurrentVideo) return
+
       // Check if we should repeat the current file
       if (viewModel.shouldRepeatCurrentFile()) {
         MPVLib.command("seek", "0", "absolute")

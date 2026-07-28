@@ -1,4 +1,3 @@
-import com.android.build.api.variant.FilterConfiguration
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -17,8 +16,11 @@ android {
     applicationId = "app.marlboroadvance.mpvex"
     minSdk = 26
     targetSdk = 36
-    versionCode = 138
-    versionName = "1.3.8"
+    // Previous builds encoded the ABI in the last digit (a device build reached 1402).
+    // Use one code for every APK so switching between universal and
+    // architecture-specific packages is never treated as a downgrade.
+    versionCode = 1404
+    versionName = "1.3.9"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -142,29 +144,6 @@ android {
   @Suppress("UnstableApiUsage")
   androidResources {
     generateLocaleConfig = true
-  }
-}
-
-androidComponents {
-  onVariants { variant ->
-    variant.outputs.forEach { output ->
-      val abi = output.filters
-        .find { it.filterType == FilterConfiguration.FilterType.ABI }
-        ?.identifier
-
-      val abiSuffix = when (abi) {
-        "armeabi-v7a" -> 1
-        "arm64-v8a" -> 2
-        "x86" -> 3
-        "x86_64" -> 4
-        null -> 9 // Universal APK gets highest suffix to allow updating any split
-        else -> 0
-      }
-
-      output.versionCode.set(
-        (output.versionCode.orNull ?: 0) * 10 + abiSuffix
-      )
-    }
   }
 }
 

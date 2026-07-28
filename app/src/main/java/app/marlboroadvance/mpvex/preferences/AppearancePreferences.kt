@@ -45,7 +45,7 @@ class AppearancePreferences(
   val bottomRightControls =
     preferenceStore.getString(
       "bottom_right_controls",
-      "FRAME_NAVIGATION,VIDEO_ZOOM,PICTURE_IN_PICTURE,ASPECT_RATIO",
+      "FRAME_NAVIGATION,DELETE_CURRENT_VIDEO,VIDEO_ZOOM,PICTURE_IN_PICTURE,ASPECT_RATIO",
     )
 
   val bottomLeftControls =
@@ -57,14 +57,15 @@ class AppearancePreferences(
   val portraitBottomControls =
     preferenceStore.getString(
       "portrait_bottom_controls",
-      "SCREEN_ROTATION,DECODER,AUDIO_TRACK,SUBTITLES,BOOKMARKS_CHAPTERS,PLAYBACK_SPEED,BACKGROUND_PLAYBACK,REPEAT_MODE,SHUFFLE,VIDEO_ZOOM,FRAME_NAVIGATION,ASPECT_RATIO,PICTURE_IN_PICTURE,LOCK_CONTROLS,MORE_OPTIONS",
+      "SCREEN_ROTATION,DECODER,AUDIO_TRACK,SUBTITLES,BOOKMARKS_CHAPTERS,PLAYBACK_SPEED,BACKGROUND_PLAYBACK,REPEAT_MODE,SHUFFLE,VIDEO_ZOOM,FRAME_NAVIGATION,DELETE_CURRENT_VIDEO,ASPECT_RATIO,PICTURE_IN_PICTURE,LOCK_CONTROLS,MORE_OPTIONS",
     )
 
   fun parseButtons(
     csv: String,
     usedButtons: MutableSet<PlayerButton>,
-  ): List<PlayerButton> =
-    csv
+  ): List<PlayerButton> {
+    val parsed =
+      csv
       .splitToSequence(',')
       .map { it.trim().uppercase() }
       .mapNotNull { name ->
@@ -74,8 +75,23 @@ class AppearancePreferences(
           null
         }
       }.filter { it != PlayerButton.NONE }
-      .filter { usedButtons.add(it) }
       .toList()
+
+    // Existing users already have a saved layout from before this button existed.
+    // Insert it next to Frame Navigation once, while still respecting explicit
+    // layouts that already contain the delete button.
+    val withDeleteButton = parsed.toMutableList()
+    val frameIndex = withDeleteButton.indexOf(PlayerButton.FRAME_NAVIGATION)
+    if (
+      frameIndex >= 0 &&
+      PlayerButton.DELETE_CURRENT_VIDEO !in withDeleteButton &&
+      PlayerButton.DELETE_CURRENT_VIDEO !in usedButtons
+    ) {
+      withDeleteButton.add(frameIndex + 1, PlayerButton.DELETE_CURRENT_VIDEO)
+    }
+
+    return withDeleteButton.filter { usedButtons.add(it) }
+  }
 }
 
 @Composable

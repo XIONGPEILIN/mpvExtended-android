@@ -100,6 +100,12 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  override fun onResume() {
+    super.onResume()
+    // PlayerActivity temporarily becomes the owner while it is visible.
+    PermissionUtils.setMediaAccessLauncher(mediaAccessLauncher)
+  }
+
   override fun onDestroy() {
     try {
       super.onDestroy()

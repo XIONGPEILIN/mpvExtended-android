@@ -235,7 +235,7 @@ object PermissionUtils {
     ): Pair<Int, Int> =
       withContext(Dispatchers.IO) {
         if (!BuildConfig.SCOPED_STORAGE_ONLY || hasManageStoragePermission()) {
-          deleteVideosDirectly(videos)
+          deleteVideosDirectly(context, videos)
         } else {
           deleteVideosScoped(context, videos)
         }
@@ -244,15 +244,32 @@ object PermissionUtils {
     /**
      * Delete videos using direct file operations (requires MANAGE_EXTERNAL_STORAGE on Android 11+)
      */
-    private suspend fun deleteVideosDirectly(videos: List<Video>): Pair<Int, Int> =
+    private suspend fun deleteVideosDirectly(
+      context: Context,
+      videos: List<Video>,
+    ): Pair<Int, Int> =
       withContext(Dispatchers.IO) {
         var deleted = 0
         var failed = 0
 
         for (video in videos) {
           try {
-            val file = File(video.path)
-            if (file.exists() && file.delete()) {
+            val wasDeleted =
+              if (video.uri.scheme == "content") {
+                try {
+                  context.contentResolver.delete(video.uri, null, null) > 0
+                } catch (_: SecurityException) {
+                  // A local content URI can still require Android's per-item
+                  // confirmation when broad storage access is unavailable.
+                  Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                    requestDeleteAccess(context, listOf(video.uri))
+                }
+              } else {
+                val file = File(video.path)
+                file.exists() && file.delete()
+              }
+
+            if (wasDeleted) {
               deleted++
               RecentlyPlayedOps.onVideoDeleted(video.path)
               PlaybackStateOps.onVideoDeleted(video.path)
