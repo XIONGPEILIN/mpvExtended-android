@@ -50,7 +50,7 @@ export function Header({ downloadUrl }: { downloadUrl?: string }) {
           <div className="relative w-10 h-10 flex items-center justify-center shrink-0 bg-foreground/5 dark:bg-white/5 rounded-xl overflow-hidden border border-border/50 shadow-sm transition-transform duration-300 group-hover:scale-110">
             <Image
               src="/icon.png"
-              alt="mpvEx Logo"
+              alt="mpv NAS Player Logo"
               width={40}
               height={40}
               priority
@@ -58,7 +58,7 @@ export function Header({ downloadUrl }: { downloadUrl?: string }) {
             />
           </div>
           <span className="text-foreground font-bold text-lg tracking-tight group-hover:text-primary transition-colors">
-            mpvEx
+            mpv NAS Player
           </span>
         </div>
 
@@ -75,9 +75,7 @@ export function Header({ downloadUrl }: { downloadUrl?: string }) {
               className="text-foreground/80 hover:text-primary transition-all text-sm px-4 py-2 hover:bg-foreground/5 rounded-full relative overflow-hidden group font-bold"
               onClick={(e) => {
                 e.preventDefault();
-                document
-                  .querySelector(item.href)
-                  ?.scrollIntoView({ behavior: "smooth" });
+                document.querySelector(item.href)?.scrollIntoView({ behavior: "smooth" });
               }}
             >
               <span className="relative z-10">{item.name}</span>
@@ -113,12 +111,7 @@ export function Header({ downloadUrl }: { downloadUrl?: string }) {
           {/* Download Button */}
           <Button
             className="bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl transition-all duration-300 shadow-[0_0_20px_-5px_hsl(var(--primary)/0.5)] active:scale-95"
-            onClick={() =>
-              window.open(
-                downloadUrl || siteConfig.links.latestRelease,
-                "_blank",
-              )
-            }
+            onClick={() => window.open(downloadUrl || siteConfig.links.latestRelease, "_blank")}
           >
             Download
           </Button>
@@ -159,9 +152,7 @@ export function Header({ downloadUrl }: { downloadUrl?: string }) {
                   onClick={(e) => {
                     e.preventDefault();
                     setIsOpen(false);
-                    document
-                      .querySelector(item.href)
-                      ?.scrollIntoView({ behavior: "smooth" });
+                    document.querySelector(item.href)?.scrollIntoView({ behavior: "smooth" });
                   }}
                 >
                   {item.name}
@@ -176,10 +167,7 @@ export function Header({ downloadUrl }: { downloadUrl?: string }) {
               <Button
                 className="flex-2 h-14 bg-primary hover:bg-primary/90 text-primary-foreground rounded-2xl shadow-lg active:scale-95 transition-all"
                 onClick={() => {
-                  window.open(
-                    downloadUrl || siteConfig.links.latestRelease,
-                    "_blank",
-                  );
+                  window.open(downloadUrl || siteConfig.links.latestRelease, "_blank");
                   setIsOpen(false);
                 }}
               >
@@ -188,11 +176,7 @@ export function Header({ downloadUrl }: { downloadUrl?: string }) {
             </div>
 
             <div className="flex justify-center gap-6 mt-4 opacity-60 md:hidden">
-              <a
-                href={siteConfig.links.github}
-                target="_blank"
-                rel="noreferrer"
-              >
+              <a href={siteConfig.links.github} target="_blank" rel="noreferrer">
                 <Github className="w-5 h-5 text-foreground" />
               </a>
               <a

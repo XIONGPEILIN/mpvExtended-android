@@ -9,10 +9,9 @@
  * Contains metadata, external links, and author information used throughout the application.
  */
 export const siteConfig = {
-  name: "mpvExtended",
-  version: "v1.2.7",
-  description:
-    "Advanced mpv-based video player for Android with powerful features, seamless playback, and open-source freedom.",
+  name: "mpv NAS Player",
+  version: "v1.3.10",
+  description: "NAS-first Android video player for SMB, FTP and WebDAV, powered by libmpv.",
   url: "https://mpvex.vercel.app",
   ogImage: "https://mpvex.vercel.app/og.jpg",
   icons: {
@@ -20,15 +19,15 @@ export const siteConfig = {
     apple: "/apple-icon.png",
   },
   links: {
-    github: "https://github.com/marlboro-advance/mpvEx",
-    releases: "https://github.com/marlboro-advance/mpvEx/releases",
-    latestRelease: "https://github.com/marlboro-advance/mpvEx/releases/latest",
+    github: "https://github.com/XIONGPEILIN/mpvExtended-android",
+    releases: "https://github.com/XIONGPEILIN/mpvExtended-android/releases",
+    latestRelease: "https://github.com/XIONGPEILIN/mpvExtended-android/releases/latest",
     izzyOnAndroid: "https://apt.izzysoft.de/packages/app.marlboroadvance.mpvex",
-    contributors: "https://github.com/marlboro-advance/mpvEx/graphs/contributors",
+    contributors: "https://github.com/XIONGPEILIN/mpvExtended-android/graphs/contributors",
   },
   author: {
-    name: "marlboro-advance",
-    url: "https://github.com/marlboro-advance",
+    name: "XIONGPEILIN",
+    url: "https://github.com/XIONGPEILIN",
   },
 } as const;
 

@@ -1,19 +1,31 @@
-mpvExtended is a front-end for the versatile media player mpv, built on the libmpv library. It aims to combine the powerful features of mpv with an easier-to-use interface and additional functionality.
+mpv NAS Player is a NAS-first Android media player powered by libmpv.
 
- - Simpler and Easier to Use UI: Designed to make navigation and playback smoother, especially for those who want a straightforward media player experience.
- - Advanced Configuration and Scripting: Offers the full capabilities of mpv's scripting and configuration for users who want to customize their playback.
- - Enhanced Playback Features: Frame-by-frame navigation, sleep timer, speed presets, and better playback history implementation.
- - Picture-in-Picture (PiP): Continue watching videos while using other apps.
- - Multi-Modal Controls: Includes customizable gestures for controlling volume, brightness, and playback, along with keyboard input support.
- - High-Quality Rendering: Hardware and software video decoding with advanced rendering settings.
- - Network Streaming: Play network streams with the "Open URL" function.
- - File Management: Provides basic file operations like copy, move, rename, and delete.
+Browse and play videos directly from SMB, FTP and WebDAV servers. Saved connections, automatic reconnect, SMB keep-alive and a seekable local streaming proxy make long videos and multi-episode playback more reliable on phones and tablets.
 
-mpvExtended aims to enhance the mpv experience by making it more accessible while retaining its flexibility and powerful playback capabilities.
+NAS features:
 
-This app respects your freedom and privacy:
+* Native SMB, FTP and WebDAV browsing
+* Automatic network-folder playlists and continuous playback
+* Stable playback history and resume positions for network files
+* Network subtitles, external subtitles and network thumbnails
+* Remote file selection and deletion
+* Reconnect and keep-alive handling for interrupted NAS sessions
 
-* No trackers
+Player features:
+
+* Hardware and software decoding through libmpv
+* Picture-in-picture and background playback
+* Custom gestures and player controls
+* Precise seeking, speed presets, AB loop and frame navigation
+* Audio, subtitle and external track selection
+* Anime4K shaders and advanced mpv configuration
+* Material 3 interface with phone and tablet layouts
+* Simplified Chinese localization
+
+The app keeps the original application ID so existing users can upgrade without losing settings, network connections, playback history or playlists.
+
+Privacy:
+
 * No advertisements
+* No trackers
 * Fully open source
-* No unnecessary permissions

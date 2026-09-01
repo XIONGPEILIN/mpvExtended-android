@@ -881,6 +881,18 @@ class PlayerViewModel(
     }
   }
 
+  /**
+   * Pauses immediately while a destructive confirmation dialog is visible.
+   *
+   * @return whether playback should resume if the dialog is cancelled.
+   */
+  fun pauseForDeleteConfirmation(): Boolean {
+    val shouldResumeOnCancel = MPVLib.getPropertyBoolean("pause") != true
+    MPVLib.setPropertyBoolean("pause", true)
+    viewModelScope.launch(Dispatchers.Main) { host.abandonAudioFocus() }
+    return shouldResumeOnCancel
+  }
+
   fun unpause() {
     viewModelScope.launch(Dispatchers.IO) {
       withContext(Dispatchers.Main) { host.requestAudioFocus() }

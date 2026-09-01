@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-  <string name="app_name">mpvEx</string>
+  <string name="app_name">mpv NAS Player</string>
   <string name="generic_reset">重置</string>
   <string name="generic_share">分享</string>
   <string name="generic_confirm">确认</string>

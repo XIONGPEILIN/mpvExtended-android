@@ -11,12 +11,7 @@ const iconMap: Record<string, React.ReactNode> = {
   zap: <FlaskConical className="w-8 h-8 text-red-500" />,
   download: (
     <div className="relative w-32 h-12">
-      <Image
-        src="/izzy.svg"
-        alt="Get it at IzzyOnDroid"
-        fill
-        className="object-contain"
-      />
+      <Image src="/izzy.svg" alt="Get it at IzzyOnDroid" fill className="object-contain" />
     </div>
   ),
 };
@@ -35,8 +30,8 @@ export function DownloadsSection({ downloadUrl }: { downloadUrl?: string }) {
           </span>
         </h2>
         <p className="text-lg text-muted-foreground text-center mb-20 max-w-2xl mx-auto">
-          Download mpvExtended from your preferred source and start experiencing
-          premium playback today.
+          Download mpv NAS Player from your preferred source and start experiencing premium playback
+          today.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -55,9 +50,7 @@ export function DownloadsSection({ downloadUrl }: { downloadUrl?: string }) {
                 <div className="mb-6 text-secondary flex justify-center transition-transform duration-500 group-hover:scale-110">
                   {iconMap[option.icon]}
                 </div>
-                <h3 className="text-2xl font-semibold text-foreground mb-3 ">
-                  {option.title}
-                </h3>
+                <h3 className="text-2xl font-semibold text-foreground mb-3 ">{option.title}</h3>
                 <p className="text-muted-foreground leading-relaxed mb-8 grow text-sm">
                   {option.description}
                 </p>

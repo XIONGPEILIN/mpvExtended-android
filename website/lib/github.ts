@@ -18,13 +18,11 @@ export interface GitHubContributor {
   public_repos?: number;
 }
 
-const REPO_OWNER = "marlboro-advance";
-const REPO_NAME = "mpvEx";
+const REPO_OWNER = "XIONGPEILIN";
+const REPO_NAME = "mpvExtended-android";
 const GITHUB_API_URL = "https://api.github.com";
 
-export async function getRepositoryContributors(
-  limit?: number,
-): Promise<GitHubContributor[]> {
+export async function getRepositoryContributors(limit?: number): Promise<GitHubContributor[]> {
   try {
     const url = `${GITHUB_API_URL}/repos/${REPO_OWNER}/${REPO_NAME}/contributors?per_page=${limit || 100}&sort=contributions`;
 
@@ -47,9 +45,7 @@ export async function getRepositoryContributors(
   }
 }
 
-export async function getContributorDetails(
-  username: string,
-): Promise<GitHubContributor | null> {
+export async function getContributorDetails(username: string): Promise<GitHubContributor | null> {
   try {
     const url = `${GITHUB_API_URL}/users/${username}`;
 

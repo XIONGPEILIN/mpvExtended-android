@@ -19,8 +19,8 @@ android {
     // Previous builds encoded the ABI in the last digit (a device build reached 1402).
     // Use one code for every APK so switching between universal and
     // architecture-specific packages is never treated as a downgrade.
-    versionCode = 1404
-    versionName = "1.3.9"
+    versionCode = 1405
+    versionName = "1.3.10"
 
     vectorDrawables {
       useSupportLibrary = true

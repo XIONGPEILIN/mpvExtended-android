@@ -1,15 +1,18 @@
 {
-  "name": "mpvex-web",
+  "name": "mpv-nas-player-web",
   "version": "0.1.0",
-  "description": "Advanced mpv-based video player for Android with powerful features, seamless playback, and open-source freedom.",
+  "description": "Website for the NAS-first Android player powered by libmpv.",
   "private": true,
   "author": {
-    "name": "marlboro-advance",
-    "url": "https://github.com/marlboro-advance"
+    "name": "XIONGPEILIN",
+    "url": "https://github.com/XIONGPEILIN"
   },
   "license": "Apache-2.0",
   "keywords": [
     "mpv",
+    "nas",
+    "smb",
+    "webdav",
     "android",
     "video-player",
     "nextjs",

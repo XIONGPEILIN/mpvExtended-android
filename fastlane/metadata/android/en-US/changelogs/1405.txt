@@ -1,0 +1,6 @@
+Renamed the project to mpv NAS Player and refreshed its NAS-first documentation.
+
+- Pause immediately while confirming deletion of the current video, preventing an automatic next-video switch from changing the deletion target.
+- Preserve the original playback state when the deletion dialog is cancelled.
+- Keep playback running while dragging or tapping the seek bar.
+- Point update checks and project links to the current GitHub repository.

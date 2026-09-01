@@ -466,10 +466,22 @@ fun RenderPlayerButton(
 
     PlayerButton.DELETE_CURRENT_VIDEO -> {
       var showDeleteConfirmation by remember { mutableStateOf(false) }
+      var resumePlaybackOnCancel by remember { mutableStateOf(false) }
+
+      val dismissDeleteConfirmation = {
+        showDeleteConfirmation = false
+        if (resumePlaybackOnCancel) {
+          resumePlaybackOnCancel = false
+          viewModel.unpause()
+        }
+      }
 
       ControlsButton(
         icon = Icons.Default.DeleteForever,
-        onClick = { showDeleteConfirmation = true },
+        onClick = {
+          resumePlaybackOnCancel = viewModel.pauseForDeleteConfirmation()
+          showDeleteConfirmation = true
+        },
         title = stringResource(R.string.player_delete_current_video),
         color = if (hideBackground) controlColor else MaterialTheme.colorScheme.error,
         modifier = Modifier.size(buttonSize),
@@ -482,7 +494,7 @@ fun RenderPlayerButton(
             .ifBlank { stringResource(R.string.player_delete_current_video) }
 
         AlertDialog(
-          onDismissRequest = { showDeleteConfirmation = false },
+          onDismissRequest = dismissDeleteConfirmation,
           title = { Text(stringResource(R.string.player_delete_current_video_title)) },
           text = {
             Text(
@@ -495,6 +507,7 @@ fun RenderPlayerButton(
           confirmButton = {
             TextButton(
               onClick = {
+                resumePlaybackOnCancel = false
                 showDeleteConfirmation = false
                 activity.deleteCurrentVideo()
               },
@@ -506,7 +519,7 @@ fun RenderPlayerButton(
             }
           },
           dismissButton = {
-            TextButton(onClick = { showDeleteConfirmation = false }) {
+            TextButton(onClick = dismissDeleteConfirmation) {
               Text(stringResource(android.R.string.cancel))
             }
           },

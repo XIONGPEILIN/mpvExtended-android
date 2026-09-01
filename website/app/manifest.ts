@@ -5,7 +5,7 @@ import { siteConfig } from "@/lib/site";
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: siteConfig.name,
-    short_name: "mpvEx",
+    short_name: "mpv NAS",
     description: siteConfig.description,
     start_url: "/",
     display: "standalone",

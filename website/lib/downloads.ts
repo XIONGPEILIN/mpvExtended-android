@@ -17,7 +17,7 @@ export const downloads: DownloadOption[] = [
     description: "Download the latest stable version directly from GitHub.",
     icon: Github,
     buttonText: "Download APK",
-    href: "https://github.com/marlboro-advance/mpvEx/releases",
+    href: "https://github.com/XIONGPEILIN/mpvExtended-android/releases",
   },
   {
     id: "preview",
@@ -25,7 +25,7 @@ export const downloads: DownloadOption[] = [
     description: "Test the latest features and improvements in development.",
     icon: Building2,
     buttonText: "View Pre-releases",
-    href: "https://github.com/marlboro-advance/mpvEx/releases",
+    href: "https://github.com/XIONGPEILIN/mpvExtended-android/releases",
   },
   {
     id: "izzyondroid",

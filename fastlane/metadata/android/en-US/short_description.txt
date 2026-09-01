@@ -1,1 +1,1 @@
-A powerful media player built on mpv with an improved user interface
+NAS-first Android player for SMB, FTP and WebDAV, powered by libmpv
