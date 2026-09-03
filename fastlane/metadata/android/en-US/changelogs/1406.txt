@@ -1,0 +1,3 @@
+Fix a crash when opening a local video from Recently Played.
+
+Playback launched from an application context now uses the correct Android task flag.

@@ -10,7 +10,7 @@
  */
 export const siteConfig = {
   name: "mpv NAS Player",
-  version: "v1.3.10",
+  version: "v1.3.11",
   description: "NAS-first Android video player for SMB, FTP and WebDAV, powered by libmpv.",
   url: "https://mpvex.vercel.app",
   ogImage: "https://mpvex.vercel.app/og.jpg",

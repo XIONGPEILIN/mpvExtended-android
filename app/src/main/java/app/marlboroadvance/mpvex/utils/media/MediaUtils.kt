@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.utils.media
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -75,6 +76,9 @@ object MediaUtils {
             TAG,
             "Launching PlayerActivity from Video source: uri=${source.uri}, displayName=${source.displayName}, launchSource=$launchSource, networkConnectionId=${source.networkConnectionId}",
           )
+          if (context !is Activity) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          }
           context.startActivity(intent)
           return
         }
@@ -108,6 +112,9 @@ object MediaUtils {
     intent.setClass(context, PlayerActivity::class.java)
     intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    if (context !is Activity) {
+      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
     launchSource?.let { intent.putExtra("launch_source", it) }
     Log.d(TAG, "Launching PlayerActivity from raw source: uri=$uri, launchSource=$launchSource")
     context.startActivity(intent)
