@@ -970,6 +970,62 @@ class PlayerViewModel(
 
   // ==================== Seeking ====================
 
+  private var autoChapterSkipJob: Job? = null
+  private var autoChapterSkipGeneration = 0L
+
+  // Called on the main thread at file transitions and before native-player teardown.
+  fun resetAutoChapterSkip(): Long {
+    autoChapterSkipJob?.cancel()
+    autoChapterSkipJob = null
+    return ++autoChapterSkipGeneration
+  }
+
+  fun startAutoChapterSkip(generation: Long) {
+    if (generation != autoChapterSkipGeneration) return
+    autoChapterSkipJob?.cancel()
+    autoChapterSkipJob = viewModelScope.launch {
+      val session = ChapterSkipSession()
+      while (isActive) {
+        delay(250)
+        if (!playerPreferences.autoSkip90SecondChapters.get()) {
+          continue
+        }
+        // Never interfere with a pause, an explicit seek, or a user-defined loop.
+        if (MPVLib.getPropertyBoolean("pause") != false ||
+          MPVLib.getPropertyBoolean("idle-active") != false ||
+          MPVLib.getPropertyBoolean("seeking") != false ||
+          MPVLib.getPropertyBoolean("seekable") != true ||
+          _abLoopA.value != null || _abLoopB.value != null
+        ) continue
+
+        val chapter = MPVLib.getPropertyInt("chapter") ?: continue
+        val count = MPVLib.getPropertyInt("chapter-list/count") ?: continue
+        if (chapter !in 0 until count) continue
+        val start = MPVLib.getPropertyDouble("chapter-list/$chapter/time") ?: continue
+        val duration = MPVLib.getPropertyDouble("duration") ?: continue
+        val end = if (chapter + 1 < count) {
+          MPVLib.getPropertyDouble("chapter-list/${chapter + 1}/time") ?: continue
+        } else {
+          duration
+        }
+        val position = MPVLib.getPropertyDouble("time-pos") ?: continue
+        val target = session.claim(chapter, position, start, end, duration) ?: continue
+
+        // Once per chapter per file load. Seeking back or toggling off/on never
+        // clears this history, so the user can watch any mistakenly skipped scene.
+        seekCoalesceJob?.cancel()
+        pendingSeekOffset = 0
+        if (chapter == count - 1) {
+          MPVLib.command("seek", "100", "absolute-percent+exact")
+        } else {
+          MPVLib.command("seek", target.toString(), "absolute+exact")
+        }
+        Log.d("ChapterAutoSkip", "chapter=$chapter length=${end - start} target=$target")
+        showToast(host.context.getString(R.string.player_auto_skipped_chapter))
+      }
+    }
+  }
+
   fun seekBy(offset: Int) {
     coalesceSeek(offset)
   }

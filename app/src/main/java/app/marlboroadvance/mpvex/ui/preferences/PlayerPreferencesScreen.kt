@@ -241,6 +241,16 @@ object PlayerPreferencesScreen : Screen {
                 onSliderValueChange = { preferences.customSkipDuration.set(it.roundToInt()) },
                 sliderValue = customSkipDuration.toFloat(),
               )
+
+              PreferenceDivider()
+
+              val autoSkipChapters by preferences.autoSkip90SecondChapters.collectAsState()
+              SwitchPreference(
+                value = autoSkipChapters,
+                onValueChange = preferences.autoSkip90SecondChapters::set,
+                title = { Text(stringResource(R.string.pref_player_auto_skip_chapters_title)) },
+                summary = { Text(stringResource(R.string.pref_player_auto_skip_chapters_summary)) },
+              )
             }
           }
           // Gestures Section

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Autorenew
 import androidx.compose.material.icons.outlined.Segment
 import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material.icons.outlined.FastForward
+import androidx.compose.material.icons.outlined.AutoMode
 import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -58,6 +59,7 @@ enum class PlayerButton(
   VERTICAL_FLIP(Icons.Outlined.Flip),
   AB_LOOP(Icons.Outlined.Autorenew),
   CUSTOM_SKIP(Icons.Outlined.FastForward),
+  AUTO_SKIP_CHAPTERS(Icons.Outlined.AutoMode),
   BACKGROUND_PLAYBACK(Icons.Outlined.Headset),
   NONE(Icons.Outlined.Bookmarks),
 }
@@ -102,6 +104,7 @@ fun getPlayerButtonLabel(button: PlayerButton): String =
     PlayerButton.VERTICAL_FLIP -> "Vertical Flip"
     PlayerButton.AB_LOOP -> "A-B Loop"
     PlayerButton.CUSTOM_SKIP -> "Custom Skip"
+    PlayerButton.AUTO_SKIP_CHAPTERS -> androidx.compose.ui.res.stringResource(app.marlboroadvance.mpvex.R.string.player_auto_skip_label)
     PlayerButton.BACKGROUND_PLAYBACK -> "Background Playback"
     PlayerButton.NONE -> "None"
   }

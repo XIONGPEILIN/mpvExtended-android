@@ -130,6 +130,12 @@
   <string name="pref_player_orientation_sensor_landscape">Sensor landscape</string>
   <string name="pref_player_save_position_on_quit">Save position on quit</string>
   <string name="pref_player_double_tap_seek_duration">Double tap seek duration</string>
+  <string name="pref_player_auto_skip_chapters_title">Auto-skip 80–100-second chapters (OP/ED)</string>
+  <string name="pref_player_auto_skip_chapters_summary">Skip chapters lasting 80–100 seconds (inclusive), regardless of title. Each chapter is skipped only once per file load; seek back to watch it. Requires chapters and may skip story content of the same length. No auto-skip while paused or in an A-B loop.</string>
+  <string name="player_auto_skip_label">Auto-skip OP/ED</string>
+  <string name="player_auto_skip_on">Auto-skip OP/ED: on (80–100 s, once per chapter)</string>
+  <string name="player_auto_skip_off">Auto-skip OP/ED: off</string>
+  <string name="player_auto_skipped_chapter">Skipped an 80–100-second chapter</string>
   <string name="pref_player_custom_skip_duration_title">Custom skip duration</string>
   <string name="pref_player_custom_skip_duration_summary">Duration to skip forward on custom skip button</string>
   <string name="pref_player_seeking_title">Seeking</string>

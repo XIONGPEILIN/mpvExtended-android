@@ -135,6 +135,12 @@
   <string name="pref_player_orientation_sensor_landscape">传感器横向</string>
   <string name="pref_player_save_position_on_quit">退出时保存播放位置</string>
   <string name="pref_player_double_tap_seek_duration">双击寻道时长</string>
+  <string name="pref_player_auto_skip_chapters_title">自动跳过 80–100 秒章节（OP/ED）</string>
+  <string name="pref_player_auto_skip_chapters_summary">自动跳过 80–100 秒（含两端）的章节，不检查章节名。本次播放每章只跳一次，拖回来即可正常观看，重新打开视频后重置。需要视频带章节，可能误跳同长度正片。暂停和 A-B 循环期间不自动跳过。</string>
+  <string name="player_auto_skip_label">自动跳过 OP/ED</string>
+  <string name="player_auto_skip_on">自动跳过 OP/ED：已开启（80–100 秒，每章一次）</string>
+  <string name="player_auto_skip_off">自动跳过 OP/ED：已关闭</string>
+  <string name="player_auto_skipped_chapter">已跳过 80–100 秒的章节</string>
   <string name="pref_player_custom_skip_duration_title">自定义跳转时长</string>
   <string name="pref_player_custom_skip_duration_summary">自定义跳转按钮的前进时长</string>
   <string name="pref_player_seeking_title">寻道</string>

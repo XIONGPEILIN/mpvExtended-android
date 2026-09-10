@@ -45,7 +45,7 @@ class AppearancePreferences(
   val bottomRightControls =
     preferenceStore.getString(
       "bottom_right_controls",
-      "FRAME_NAVIGATION,DELETE_CURRENT_VIDEO,VIDEO_ZOOM,PICTURE_IN_PICTURE,ASPECT_RATIO",
+      "CUSTOM_SKIP,AUTO_SKIP_CHAPTERS,FRAME_NAVIGATION,DELETE_CURRENT_VIDEO,VIDEO_ZOOM,PICTURE_IN_PICTURE,ASPECT_RATIO",
     )
 
   val bottomLeftControls =
@@ -59,6 +59,34 @@ class AppearancePreferences(
       "portrait_bottom_controls",
       "SCREEN_ROTATION,DECODER,AUDIO_TRACK,SUBTITLES,BOOKMARKS_CHAPTERS,PLAYBACK_SPEED,BACKGROUND_PLAYBACK,REPEAT_MODE,SHUFFLE,VIDEO_ZOOM,FRAME_NAVIGATION,DELETE_CURRENT_VIDEO,ASPECT_RATIO,PICTURE_IN_PICTURE,LOCK_CONTROLS,MORE_OPTIONS",
     )
+
+  init {
+    // Migrate saved layouts once; subsequent user removals must remain respected.
+    val migrated = preferenceStore.getBoolean("custom_skip_layout_migrated", false)
+    if (!migrated.get()) {
+      val otherRegions = listOf(topLeftControls, topRightControls, bottomLeftControls)
+      otherRegions.forEach { preference ->
+        val buttons = preference.get().split(',')
+        if ("CUSTOM_SKIP" in buttons) {
+          preference.set(buttons.filterNot { it == "CUSTOM_SKIP" }.joinToString(","))
+        }
+      }
+      val buttons = bottomRightControls.get().split(',').filter(String::isNotBlank)
+      if ("CUSTOM_SKIP" !in buttons) {
+        bottomRightControls.set((listOf("CUSTOM_SKIP") + buttons).joinToString(","))
+      }
+      migrated.set(true)
+    }
+    val autoSkipMigrated = preferenceStore.getBoolean("auto_skip_chapters_layout_migrated", false)
+    if (!autoSkipMigrated.get()) {
+      val buttons = bottomRightControls.get().split(',').filter(String::isNotBlank).toMutableList()
+      if ("AUTO_SKIP_CHAPTERS" !in buttons) {
+        buttons.add((buttons.indexOf("CUSTOM_SKIP") + 1).coerceAtLeast(0), "AUTO_SKIP_CHAPTERS")
+        bottomRightControls.set(buttons.joinToString(","))
+      }
+      autoSkipMigrated.set(true)
+    }
+  }
 
   fun parseButtons(
     csv: String,

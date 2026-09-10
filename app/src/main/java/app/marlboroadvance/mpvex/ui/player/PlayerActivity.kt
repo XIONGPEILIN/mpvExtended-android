@@ -677,6 +677,7 @@ class PlayerActivity :
   @RequiresApi(Build.VERSION_CODES.P)
   override fun onDestroy() {
     Log.d(TAG, "PlayerActivity onDestroy")
+    viewModel.resetAutoChapterSkip()
 
     if (registeredStreamIds.isNotEmpty()) {
       val proxy = app.marlboroadvance.mpvex.ui.browser.networkstreaming.proxy.NetworkStreamingProxy.getInstance()
@@ -2046,6 +2047,9 @@ class PlayerActivity :
    */
   internal fun event(eventId: Int) {
     when (eventId) {
+      MPVLib.MpvEvent.MPV_EVENT_START_FILE,
+      MPVLib.MpvEvent.MPV_EVENT_END_FILE -> viewModel.resetAutoChapterSkip()
+
       MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
         if (isDeletingCurrentVideo) {
           endDeletionPlaybackTransition()
@@ -2069,6 +2073,7 @@ class PlayerActivity :
    * applies user preferences, and sets up metadata and media session.
    */
   private fun handleFileLoaded() {
+    val autoSkipGeneration = viewModel.resetAutoChapterSkip()
     // Extract fileName from intent only if not already set
     // This preserves fileName set in onNewIntent or onCreate
     if (fileName.isBlank()) {
@@ -2106,6 +2111,14 @@ class PlayerActivity :
           loadGeneration = loadGeneration,
         )
       if (!isCurrentPlaybackLoad(loadGeneration, loadedMediaIdentifier)) return@launch
+
+      // Restore resume position before allowing chapter skipping. The generation
+      // also prevents a stale restore from starting a watcher for another file.
+      withContext(Dispatchers.Main) {
+        if (isCurrentPlaybackLoad(loadGeneration, loadedMediaIdentifier)) {
+          viewModel.startAutoChapterSkip(autoSkipGeneration)
+        }
+      }
 
       // Apply track selection logic (defaults only apply when no saved state).
       // Pass the directory/playlist scope so a carried-over subtitle/audio choice only

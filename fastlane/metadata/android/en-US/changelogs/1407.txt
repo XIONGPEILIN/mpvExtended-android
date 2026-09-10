@@ -1,0 +1,5 @@
+Add Custom Skip (90 seconds by default) and an OP/ED auto-skip toggle to the default bottom-right controls.
+Optionally skip chapters lasting 80–100 seconds, inclusive, regardless of title.
+Skip each chapter only once per file load so seeking back lets you watch it.
+Keep skip history when toggling off/on. Do not auto-skip while paused, seeking, or in an A-B loop.
+Auto-skip is off by default and requires chapters; story chapters of the same length may also match.

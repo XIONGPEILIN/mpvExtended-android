@@ -66,6 +66,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
+import androidx.compose.material.icons.outlined.AutoMode
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -710,6 +712,31 @@ fun RenderPlayerButton(
         icon = Icons.Default.FastForward,
         onClick = { viewModel.seekBy(playerPreferences.customSkipDuration.get()) },
         color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.size(buttonSize),
+      )
+    }
+
+    PlayerButton.AUTO_SKIP_CHAPTERS -> {
+      val preferences = org.koin.compose.koinInject<app.marlboroadvance.mpvex.preferences.PlayerPreferences>()
+      val enabled by preferences.autoSkip90SecondChapters.collectAsState()
+      val label = androidx.compose.ui.res.stringResource(
+        if (enabled) app.marlboroadvance.mpvex.R.string.player_auto_skip_on
+        else app.marlboroadvance.mpvex.R.string.player_auto_skip_off,
+      )
+      val context = androidx.compose.ui.platform.LocalContext.current
+      ControlsButton(
+        icon = Icons.Outlined.AutoMode,
+        title = label,
+        onClick = {
+          preferences.autoSkip90SecondChapters.set(!enabled)
+          viewModel.showToast(context.getString(
+            if (!enabled) app.marlboroadvance.mpvex.R.string.player_auto_skip_on
+            else app.marlboroadvance.mpvex.R.string.player_auto_skip_off,
+          ))
+        },
+        onLongClick = { viewModel.showToast(label) },
+        color = if (enabled) MaterialTheme.colorScheme.primary
+          else if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.size(buttonSize),
       )
     }
